@@ -20,10 +20,16 @@ DATASETS_DICT = {"cifar": "CIFAR10",
                  "pts_moons": None,
                  "pts_var_gaus": None,
                  "pts_cov_gaus": None,
-                 "pts_iso_gaus": None,
-                 }
+                 "pts_iso_gaus": None}
 DATASETS = list(DATASETS_DICT.keys())
 UNLABELLED_CLASS = -1
+N_LABELS = {"cifar": 4000,
+            "svhn": 1000,
+            "pts_circles": 10,
+            "pts_moons": 6,
+            "pts_var_gaus": 12,
+            "pts_cov_gaus": 12,
+            "pts_iso_gaus": 12}
 
 
 def get_dataset(dataset):
@@ -36,7 +42,8 @@ def get_dataset(dataset):
         raise ValueError("Unkown dataset: {}".format(dataset))
 
 
-def get_train_dev_test_ssl(dataset, n_labels,
+def get_train_dev_test_ssl(dataset,
+                           n_labels=None,
                            root=None,
                            dev_size=0.1,
                            seed=123,
@@ -48,15 +55,18 @@ def get_train_dev_test_ssl(dataset, n_labels,
     dataset : {"cifar", "svhn"}
         Name of the dataset to load
 
-    root : str
+    n_labels : int
+        Number of labels to keep. If `None` uses dataset specific default.
+
+    root : str, optional
         Path to the dataset root. If `None` uses the default one.
 
-    dev_size : float or int
+    dev_size : float or int, optional
         If float, should be between 0.0 and 1.0 and represent the proportion of
         the dataset to include in the dev split. If int, represents the absolute
         number of dev samples.
 
-    seed : int
+    seed : int, optional
         Random seed.
 
     kwargs :
@@ -78,6 +88,91 @@ def get_train_dev_test_ssl(dataset, n_labels,
     make_ssl_dataset_(train, n_labels, seed=seed, is_stratify=True)
 
     return train, dev, test
+
+
+def generate_train_dev_test_ssl(dataset, n_label,
+                                n_unlabel=int(1e4),
+                                n_test=int(1e4),
+                                dev_size=0.1, seed=123, is_hard=False):
+    """Genererate simple ssl datasets.
+
+    Parameters
+    ----------
+    dataset : {"pts_circles", "pts_moons", "pts_var_gaus", "pts_cov_gaus", "pts_iso_gaus"}
+        Name of the dataset to generate
+
+    n_labels : int
+        Number of labelled examples.
+
+    n_lunabels : int
+        Number of unlabelled examples.
+
+    n_test : int
+        Number of test examples.
+
+    root : str
+        Path to the dataset root. If `None` uses the default one.
+
+    dev_size : float or int
+        If float, should be between 0.0 and 1.0 and represent a ratio beteen the
+        n_unlabel and size of the dev set. If int, represents the absolute number
+        of dev samples.
+
+    seed : int, optional
+        Random seed.
+
+    is_hard : bool, optional
+        Whether to increase nosie / variance by 1.5x to make the task more difficult.
+    """
+    n_dev = int(n_unlabel * dev_size) if dev_size < 1 else dev_size
+    hard_factor = 1.5 if is_hard else 1  # multiply by 1.5 if hard
+
+    gaus_means = np.array([[7, 9], [8., -1], [-5., -9.]])
+    args = dict(pts_circles={"f": sklearn.datasets.make_circles,
+                             "std": 0.09, "kwargs": dict(factor=.5)},
+                pts_moons={"f": sklearn.datasets.make_moons,
+                           "std": 0.13, "kwargs": {}},
+                pts_iso_gaus={"f": sklearn.datasets.make_blobs,
+                              "std": 1.5, "kwargs": dict(centers=gaus_means)},
+                pts_cov_gaus={"f": sklearn.datasets.make_blobs,
+                              "std": 1.5,
+                              "kwargs": dict(centers=gaus_means)},
+                pts_var_gaus={"f": sklearn.datasets.make_blobs,
+                              "std": np.array([1.0, 2.5, 0.5]),
+                              "kwargs": dict(centers=gaus_means)})
+
+    spec_args = args[dataset]
+
+    def get_noisy_kwargs(is_label=False):
+        if "_gaus" in dataset:
+            std_label_factor = 1 if not is_label else 0.5  # divide by 10 std
+            spec_args["kwargs"]["cluster_std"] = spec_args["std"] * std_label_factor * hard_factor
+        else:
+            std_label_factor = 1 if not is_label else 0  # no noise
+            spec_args["kwargs"]["noise"] = spec_args["std"] * std_label_factor * hard_factor
+        return spec_args["kwargs"]
+
+    X_lab, y_lab = spec_args["f"](n_samples=n_label, random_state=seed,
+                                  **get_noisy_kwargs(True))
+    X_unlab, y_unlab = spec_args["f"](n_samples=n_unlabel, random_state=seed,
+                                      **get_noisy_kwargs())
+    y_unlab[:] = -1
+    X_train = np.concatenate([X_lab, X_unlab])
+    y_train = np.concatenate([y_lab, y_unlab])
+    X_dev, y_dev = spec_args["f"](n_samples=n_dev, random_state=seed,
+                                  **get_noisy_kwargs())
+    X_test, y_test = spec_args["f"](n_samples=n_test, random_state=seed,
+                                    **get_noisy_kwargs())
+
+    if dataset == "pts_cov_gaus":
+        transformation = [[0.6, -0.6], [-0.4, 0.8]]
+        X_train = np.dot(X_train, transformation)
+        X_dev = np.dot(X_dev, transformation)
+        X_test = np.dot(X_test, transformation)
+
+    return (skorch.dataset.Dataset(X_train, y=y_train),
+            skorch.dataset.Dataset(X_dev, y=y_dev),
+            skorch.dataset.Dataset(X_test, y=y_test))
 
 
 # DATASETS
@@ -224,61 +319,6 @@ class SVHN(datasets.SVHN):
     def targets(self):
         # make compatible with CIFAR10 dataset
         return self.labels
-
-
-def generate_train_dev_test_ssl(dataset, n_label,
-                                n_unlabel=int(1e4),
-                                n_test=int(1e4),
-                                dev_size=0.1, seed=123, is_hard=False):
-    n_dev = int(n_unlabel * dev_size)
-    hard_factor = 1.5 if is_hard else 1  # multiply by 1.5 if hard
-
-    gaus_means = np.array([[7, 9], [8., -1], [-5., -9.]])
-    args = dict(pts_circles={"f": sklearn.datasets.make_circles,
-                             "std": 0.09, "kwargs": dict(factor=.5)},
-                pts_moons={"f": sklearn.datasets.make_moons,
-                           "std": 0.13, "kwargs": {}},
-                pts_iso_gaus={"f": sklearn.datasets.make_blobs,
-                              "std": 1.5, "kwargs": dict(centers=gaus_means)},
-                pts_cov_gaus={"f": sklearn.datasets.make_blobs,
-                              "std": 1.5,
-                              "kwargs": dict(centers=gaus_means)},
-                pts_var_gaus={"f": sklearn.datasets.make_blobs,
-                              "std": np.array([1.0, 2.5, 0.5]),
-                              "kwargs": dict(centers=gaus_means)})
-
-    spec_args = args[dataset]
-
-    def get_noisy_kwargs(is_label=False):
-        if "_gaus" in dataset:
-            std_label_factor = 1 if not is_label else 0.5  # divide by 10 std
-            spec_args["kwargs"]["cluster_std"] = spec_args["std"] * std_label_factor * hard_factor
-        else:
-            std_label_factor = 1 if not is_label else 0  # no noise
-            spec_args["kwargs"]["noise"] = spec_args["std"] * std_label_factor * hard_factor
-        return spec_args["kwargs"]
-
-    X_lab, y_lab = spec_args["f"](n_samples=n_label, random_state=seed,
-                                  **get_noisy_kwargs(True))
-    X_unlab, y_unlab = spec_args["f"](n_samples=n_unlabel, random_state=seed,
-                                      **get_noisy_kwargs())
-    y_unlab[:] = -1
-    X_train = np.concatenate([X_lab, X_unlab])
-    y_train = np.concatenate([y_lab, y_unlab])
-    X_dev, y_dev = spec_args["f"](n_samples=n_dev, random_state=seed,
-                                  **get_noisy_kwargs())
-    X_test, y_test = spec_args["f"](n_samples=n_test, random_state=seed,
-                                    **get_noisy_kwargs())
-
-    if dataset == "pts_cov_gaus":
-        transformation = [[0.6, -0.6], [-0.4, 0.8]]
-        X_train = np.dot(X_train, transformation)
-        X_dev = np.dot(X_dev, transformation)
-        X_test = np.dot(X_test, transformation)
-
-    return (skorch.dataset.Dataset(X_train, y=y_train),
-            skorch.dataset.Dataset(X_dev, y=y_dev),
-            skorch.dataset.Dataset(X_test, y=y_test))
 
 
 # HELPERS
