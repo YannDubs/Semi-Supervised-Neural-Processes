@@ -4,3 +4,5 @@ torchvision
 matplotlib
 tqdm
 scikit-learn
+scikit-optimize
+joblib
