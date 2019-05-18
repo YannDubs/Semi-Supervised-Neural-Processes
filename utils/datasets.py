@@ -16,11 +16,11 @@ DIR = os.path.abspath(os.path.dirname(__file__))
 
 DATASETS_DICT = {"cifar": "CIFAR10",
                  "svhn": "SVHN",
-                 "pts_circles": None,
-                 "pts_moons": None,
-                 "pts_var_gaus": None,
-                 "pts_cov_gaus": None,
-                 "pts_iso_gaus": None}
+                 "pts_circles": "None",
+                 "pts_moons": "None",
+                 "pts_var_gaus": "None",
+                 "pts_cov_gaus": "None",
+                 "pts_iso_gaus": "None"}
 DATASETS = list(DATASETS_DICT.keys())
 UNLABELLED_CLASS = -1
 N_LABELS = {"cifar": 4000,
@@ -73,6 +73,9 @@ def get_train_dev_test_ssl(dataset,
         Additional arguments to `generate_train_dev_test_ssl`.
     """
     Dataset = get_dataset(dataset)
+
+    if n_labels is None:
+        n_labels = N_LABELS[dataset]
 
     if Dataset is None:
         # has to generate
