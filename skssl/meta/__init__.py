@@ -1,1 +1,1 @@
-from .cple import CPLELearningModel
+from .selftraining import SelfTrainingMeta

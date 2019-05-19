@@ -430,7 +430,7 @@ def global_contrast_norm(images, multiplier=55, eps=1e-10):
     images = images.astype(float)
     # Subtract the mean of image
     images -= images.mean(axis=1, keepdims=True)
-    # Divide out the norm of each image
+    # Divide out the norm of each image (not std)
     per_image_norm = np.linalg.norm(images, axis=1, keepdims=True)
     # Avoid divide-by-zero
     per_image_norm[per_image_norm < eps] = 1
