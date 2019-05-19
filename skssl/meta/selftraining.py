@@ -27,7 +27,8 @@ class SelfTrainingMeta(MetaEstimatorMixin, BaseEstimator):
         Probability threshold to self-label
 
     weight_pred: float, optional
-        Weight to give to newly labeled points.
+        Weight to give to newly labeled points. Only applicable if `sample_weight`
+        is an argument of the `estimator.fit`.
     """
 
     def __init__(self, model,
@@ -72,9 +73,13 @@ class SelfTrainingMeta(MetaEstimatorMixin, BaseEstimator):
             is_conf = (p_y_hat > self.p_threshold).any(axis=1)
 
             samples_weight = [1 for _ in y_label] + [self.weight_pred for _ in y_hat[is_conf]]
-            self.model.fit(np.concatenate((X_label, X_unlabel[is_conf, :]), axis=0),
-                           np.concatenate((y_label, y_hat[is_conf]), axis=0),
-                           sample_weight=samples_weight)
+            merged_X = np.concatenate((X_label, X_unlabel[is_conf, :]), axis=0)
+            merged_y = np.concatenate((y_label, y_hat[is_conf]), axis=0)
+            try:
+                self.model.fit(merged_X, merged_y, sample_weight=samples_weight)
+            except TypeError:
+                # if sample weight not an argument of fit
+                self.model.fit(merged_X, merged_y)
             y_hat = self.predict(X_unlabel)
             p_y_hat = self.predict_proba(X_unlabel)
 
