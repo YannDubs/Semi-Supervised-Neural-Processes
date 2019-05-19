@@ -18,6 +18,7 @@ DIR = os.path.abspath(os.path.dirname(__file__))
 
 DATASETS_DICT = {"cifar10": "CIFAR10",
                  "svhn": "SVHN",
+                 "mnist": "MNIST",
                  "pts_circles": "None",
                  "pts_moons": "None",
                  "pts_var_gaus": "None",
@@ -26,6 +27,7 @@ DATASETS_DICT = {"cifar10": "CIFAR10",
 DATASETS = list(DATASETS_DICT.keys())
 N_LABELS = {"cifar10": 4000,
             "svhn": 1000,
+            "mnist": 30,
             "pts_circles": 10,
             "pts_moons": 6,
             "pts_var_gaus": 12,
@@ -302,7 +304,7 @@ class SVHN(datasets.SVHN):
             raise ValueError("Unkown `split = {}`".format(split))
 
         super().__init__(root,
-                         split="train",
+                         split=split,
                          download=True,
                          transform=transforms.Compose(transforms_list),
                          **kwargs)
@@ -311,3 +313,41 @@ class SVHN(datasets.SVHN):
     def targets(self):
         # make compatible with CIFAR10 dataset
         return self.labels
+
+
+class MNIST(datasets.MNIST):
+    """MNIST wrapper. Docs: `datasets.MNIST.`
+
+    Parameters
+    ----------
+    root : str, optional
+        Path to the dataset root. If `None` uses the default one.
+
+    split : {'train', 'test', "extra"}, optional
+        According dataset is selected.
+
+    kwargs:
+        Additional arguments to `datasets.MNIST`.
+    """
+    img_size = (1, 32, 32)
+
+    def __init__(self,
+                 root=os.path.join(DIR, '../../data/MNIST'),
+                 split="train",
+                 logger=logging.getLogger(__name__),
+                 **kwargs):
+
+        if split == "train":
+            transforms_list = [transforms.Resize(32),
+                               transforms.ToTensor()]
+        elif split == "test":
+            transforms_list = [transforms.Resize(32),
+                               transforms.ToTensor()]
+        else:
+            raise ValueError("Unkown `split = {}`".format(split))
+
+        super().__init__(root,
+                         train=split == "train",
+                         download=True,
+                         transform=transforms.Compose(transforms_list),
+                         **kwargs)

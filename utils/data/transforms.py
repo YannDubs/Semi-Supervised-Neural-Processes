@@ -176,12 +176,12 @@ def horizontal_flip(img):
 
 def random_translation(img, max_pix):
     """
-    Random translations of 0 to max_pix given np.ndarray(H W C) or PIL.Image(W H C).
+    Random translations of 0 to max_pix given np.ndarray or PIL.Image(H W C).
     """
+
     is_pil = not isinstance(img, np.ndarray)
     if is_pil:
-        # should also transpose but this function is equivalent for H and W
-        img = np.asarray(img)
+        img = np.atleast_3d(np.asarray(img))
     idx_h, idx_w = 0, 1
     img = np.pad(img, [[max_pix, max_pix], [max_pix, max_pix], [0, 0]],
                  mode="reflect")
@@ -189,5 +189,5 @@ def random_translation(img, max_pix):
     processed_data = np.roll(img, shifts, (idx_h, idx_w))
     cropped_data = processed_data[max_pix:-max_pix, max_pix:-max_pix, :]
     if is_pil:
-        img = Image.fromarray(img)
+        img = Image.fromarray(img.squeeze())
     return cropped_data
