@@ -8,6 +8,7 @@ class LabelSpreading(label_propagation.LabelSpreading):
     Wrapper to change default hyperparameters and add `get_hypopt_search_space`.
     See documentation `sklearn.semi_supervised.LabelSpreading.
     """
+
     def __init__(self, kernel="knn", n_neighbors=1000, gamma=5, n_jobs=-1,
                  max_iter=30, alpha=0.2, tol=0.001):
         super().__init__(kernel=kernel, n_neighbors=n_neighbors, gamma=gamma,
