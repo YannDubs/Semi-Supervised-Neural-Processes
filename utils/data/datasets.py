@@ -1,10 +1,8 @@
 import os
 import logging
-import pickle
 
 from PIL import Image
 import numpy as np
-from sklearn.model_selection import train_test_split
 import sklearn.datasets
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -12,9 +10,13 @@ from torchvision import transforms, datasets
 from torchvision.transforms.functional import to_tensor
 import skorch.dataset
 
+from .helpers import train_dev_split, make_ssl_dataset_
+from .transforms import (precompute_batch_tranforms, global_contrast_normalization,
+                         zca_whitening, random_translation, horizontal_flip)
+
 DIR = os.path.abspath(os.path.dirname(__file__))
 
-DATASETS_DICT = {"cifar": "CIFAR10",
+DATASETS_DICT = {"cifar10": "CIFAR10",
                  "svhn": "SVHN",
                  "pts_circles": "None",
                  "pts_moons": "None",
@@ -22,8 +24,7 @@ DATASETS_DICT = {"cifar": "CIFAR10",
                  "pts_cov_gaus": "None",
                  "pts_iso_gaus": "None"}
 DATASETS = list(DATASETS_DICT.keys())
-UNLABELLED_CLASS = -1
-N_LABELS = {"cifar": 4000,
+N_LABELS = {"cifar10": 4000,
             "svhn": 1000,
             "pts_circles": 10,
             "pts_moons": 6,
@@ -72,27 +73,36 @@ def get_train_dev_test_ssl(dataset,
     kwargs :
         Additional arguments to `generate_train_dev_test_ssl`.
     """
-    Dataset = get_dataset(dataset)
+    _Dataset = get_dataset(dataset)
 
     if n_labels is None:
         n_labels = N_LABELS[dataset]
 
-    if Dataset is None:
+    if _Dataset is None:
         # has to generate
         return generate_train_dev_test_ssl(dataset, n_labels,
                                            dev_size=dev_size,
                                            seed=seed,
                                            **kwargs)
 
-    train = Dataset(split="train") if root is None else Dataset(split="train", root=root)
-    test = Dataset(split="test") if root is None else Dataset(split="test", root=root)
+    data_kwargs = dict()
+    if root is not None:
+        data_kwargs["root"] = root
+    # important to do train before test => compute ZCA on train
+    train = _Dataset(split="train", **data_kwargs)
+    test = _Dataset(split="test", **data_kwargs)
 
+    # Nota Bene: we are actually first doing the transformatiosn such as GCN
+    # the dev splitting => normalization also done on dev, which is not ideal
+    # but fine because not doing on the test set => final results will be correct
+    # but hyperparametrization is a little biased
     train, dev = train_dev_split(train, dev_size=dev_size, seed=seed, is_stratify=True)
     make_ssl_dataset_(train, n_labels, seed=seed, is_stratify=True)
 
     return train, dev, test
 
 
+# POINT DATASETS
 def generate_train_dev_test_ssl(dataset, n_label,
                                 n_unlabel=int(1e4),
                                 n_test=int(1e4),
@@ -178,7 +188,7 @@ def generate_train_dev_test_ssl(dataset, n_label,
             skorch.dataset.Dataset(X_test, y=y_test))
 
 
-# DATASETS
+# IMAGE DATASETS
 class CIFAR10(datasets.CIFAR10):
     """CIFAR10 wrapper. Docs: `datasets.CIFAR10.`
 
@@ -206,7 +216,7 @@ class CIFAR10(datasets.CIFAR10):
     img_size = (3, 32, 32)
 
     def __init__(self,
-                 root=os.path.join(DIR, '../data/CIFAR10'),
+                 root=os.path.join(DIR, '../../data/CIFAR10'),
                  split="train",
                  logger=logging.getLogger(__name__),
                  **kwargs):
@@ -228,34 +238,13 @@ class CIFAR10(datasets.CIFAR10):
                          transform=transforms.Compose(transforms_list),
                          **kwargs)
 
-        # Precomputing to make it quicker if load multiple time
-        path_precomputed_data = os.path.join(root, "clean_{}_data.npy".format(split))
-        path_precomputed_target = os.path.join(root, "clean_{}_target.pkl".format(split))
-        if os.path.exists(path_precomputed_data) and os.path.exists(path_precomputed_target):
-            # save also targets even though not preprocesed
-            # but want to be sure that correct order
-            self.data = np.load(path_precomputed_data)
-            with open(path_precomputed_target, 'rb') as f:
-                self.targets = pickle.load(f)
-        else:
-            logger.warning("Precomputing preprocessed data ...")
-
-            self.data = global_contrast_norm(self.data)
-            if split == "train":
-                # only recomputing if train else load precomputed
-                zca_params = get_zca_params(self.data, root)
-            else:
-                zca_params = get_zca_params(None, root)
-            self.data = zca_transform(self.data, zca_params)
-
-            # use float32
-            # usually not needed because converted to PIL but we removed
-            # due to preprocessing
-            self.data = self.data.astype(np.float32)  # USE FLOAT32
-
-            np.save(path_precomputed_data, self.data)
-            with open(path_precomputed_target, 'wb') as f:
-                pickle.dump(self.targets, f)
+        basename = os.path.join(root, "clean_{}".format(split))
+        transforms_X = [global_contrast_normalization,
+                        lambda x: zca_whitening(x, root, is_load=split == "test"),
+                        lambda x: x.astype(np.float32)]
+        self.data, self.targets = precompute_batch_tranforms(self.data, self.targets, basename,
+                                                             transforms_X=transforms_X,
+                                                             logger=logger)
 
     def __getitem__(self, index):
         """Changes dfault to not convert to PIL due to preprocessing"""
@@ -298,7 +287,7 @@ class SVHN(datasets.SVHN):
     img_size = (3, 32, 32)
 
     def __init__(self,
-                 root=os.path.join(DIR, '../data/SVHN'),
+                 root=os.path.join(DIR, '../../data/SVHN'),
                  split="train",
                  logger=logging.getLogger(__name__),
                  **kwargs):
@@ -322,198 +311,3 @@ class SVHN(datasets.SVHN):
     def targets(self):
         # make compatible with CIFAR10 dataset
         return self.labels
-
-
-# HELPERS
-def make_ssl_dataset_(supervised, n_labels,
-                      unlabeled_class=UNLABELLED_CLASS, seed=123, is_stratify=True):
-    """Take a supervised dataset and turn it into an unsupervised one(inplace),
-    by giving a special unlabeled class as target."""
-    n_all = len(supervised)
-    if hasattr(supervised, "idx_mapping"):  # if splitted dataset
-        idcs_all = supervised.idx_mapping
-    else:
-        idcs_all = list(range(n_all))
-
-    stratify = [supervised.targets[i] for i in idcs_all] if is_stratify else None
-    idcs_unlabel, indcs_labels = train_test_split(idcs_all,
-                                                  stratify=stratify,
-                                                  test_size=n_labels,
-                                                  random_state=seed)
-
-    supervised.n_labels = len(indcs_labels)
-    for i in idcs_unlabel:
-        supervised.targets[i] = unlabeled_class
-
-
-class _SplitDataset(Dataset):
-    """Helper to split train dataset into train and dev dataset.
-
-    Credits: https: // gist.github.com / Fuchai / 12f2321e6c8fa53058f5eb23aeddb6ab
-    """
-
-    def __init__(self, to_split, length, idx_mapping):
-        self.idx_mapping = idx_mapping
-        self.length = length
-        self.to_split = to_split
-
-    def __getitem__(self, index):
-        return self.to_split[self.idx_mapping[index]]
-
-    def __len__(self):
-        return self.length
-
-    @property
-    def targets(self):
-        return self.to_split.targets
-
-
-def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
-    """Split a training dataset into a training and validation one.
-
-    Parameters
-    ----------
-    dev_size: float or int
-        If float, should be between 0.0 and 1.0 and represent the proportion of
-        the dataset to include in the dev split. If int, represents the absolute
-        number of dev samples.
-
-    seed: int
-        Random seed.
-
-    is_stratify: bool
-        Whether to stratify splits based on class label.
-    """
-    n_all = len(to_split)
-    idcs_all = list(range(n_all))
-    stratify = to_split.targets if is_stratify else None
-    idcs_train, indcs_val = train_test_split(idcs_all,
-                                             stratify=stratify,
-                                             test_size=dev_size,
-                                             random_state=seed)
-
-    n_val = len(indcs_val)
-    train = _SplitDataset(to_split, n_all - n_val, idcs_train)
-    valid = _SplitDataset(to_split, n_val, indcs_val)
-
-    return train, valid
-
-
-# TRANSFORMATIONS
-# all the following functions have been modified from
-# `https://github.com/brain-research/realistic-ssl-evaluation/`
-# for reproducability and also because tochvision buil-in transformation would
-# require normalization -> to PIL -> flip, but cannot PIL normalized images
-# as these are floats but shouldn't be multiplied by 255
-
-def global_contrast_norm(images, multiplier=55, eps=1e-10):
-    """Performs global contrast normalization on a array or tensor of images.
-
-    Notes
-    -----
-    - Compared to the notation in the the `Deep Learning` book(p 445), `lambda=0`
-        `s = multiplier`.
-
-    Parameters
-    ----------
-    images: np.ndarray or torch.tensor
-        Numpy array representing the original images. Shape(B, ...).
-
-    multiplier: float, optional
-        Governs severity of the adjustment.
-
-    eps: float, optional
-        Small constant to avoid divide by zero
-    """
-    shape = images.shape
-    images = images.reshape(shape[0], -1)
-    images = images.astype(float)
-    # Subtract the mean of image
-    images -= images.mean(axis=1, keepdims=True)
-    # Divide out the norm of each image (not std)
-    per_image_norm = np.linalg.norm(images, axis=1, keepdims=True)
-    # Avoid divide-by-zero
-    per_image_norm[per_image_norm < eps] = 1
-    images = multiplier * images / per_image_norm
-    return images.reshape(*shape)
-
-
-def get_zca_params(images, root_path, identity_scale=0.1, eps=1e-10):
-    """Creates function performing ZCA normalization on a numpy array of images.
-
-    Parameters
-    ----------
-    images: np.ndarray
-        Numpy array representing the original images. Shape(B, ...).
-
-    root_path: str
-        Path to save the ZCA params to.
-
-    identity_scale: float, optional
-        Scalar multiplier for identity in SVD
-
-    eps: float, optional
-        Small constant to avoid divide by zero
-    """
-    mean_path = os.path.join(root_path, "zca_mean.npy")
-    decomp_path = os.path.join(root_path, "zca_decomp.npy")
-
-    if os.path.exists(mean_path) and os.path.exists(decomp_path):
-        image_mean = np.load(mean_path)
-        zca_decomp = np.load(decomp_path)
-
-    else:
-        shape = images.shape
-        images = images.reshape(shape[0], -1)
-
-        image_covariance = np.cov(images, rowvar=False)
-        U, S, _ = np.linalg.svd(
-            image_covariance + identity_scale * np.eye(*image_covariance.shape)
-        )
-        zca_decomp = np.dot(U, np.dot(np.diag(1. / np.sqrt(S + eps)), U.T))
-        image_mean = images.mean(axis=0)
-
-        if not os.path.exists(root_path):
-            os.makedirs(root_path)
-        np.save(mean_path, image_mean)
-        np.save(decomp_path, zca_decomp)
-
-    return dict(zca_mean=image_mean,
-                zca_decomp=zca_decomp)
-
-
-def zca_transform(images, zca_params):
-    """
-    Apply a ZCA transformation on a batch array.
-    """
-    shape = images.shape
-    images = images.reshape(shape[0], -1)
-    return np.dot(images - zca_params["zca_mean"], zca_params["zca_decomp"]
-                  ).reshape(*shape)
-
-
-def horizontal_flip(img):
-    """Random horizontal flips with proba 0.5 on np.ndarray(H W C)."""
-    idx_w = 1
-    flipped_img = np.flip(img, idx_w)
-    is_flips = np.random.randint(0, 2, size=[1, 1, 1]).astype(np.float32)
-    return is_flips * flipped_img + (1 - is_flips) * flipped_img
-
-
-def random_translation(img, max_pix):
-    """
-    Random translations of 0 to max_pix given np.ndarray(H W C) or PIL.Image(W H C).
-    """
-    is_pil = not isinstance(img, np.ndarray)
-    if is_pil:
-        # should also transpose but this function is equivalent for H and W
-        img = np.asarray(img)
-    idx_h, idx_w = 0, 1
-    img = np.pad(img, [[max_pix, max_pix], [max_pix, max_pix], [0, 0]],
-                 mode="reflect")
-    shifts = np.random.randint(-max_pix, max_pix + 1, size=[2])  # H and W
-    processed_data = np.roll(img, shifts, (idx_h, idx_w))
-    cropped_data = processed_data[max_pix:-max_pix, max_pix:-max_pix, :]
-    if is_pil:
-        img = Image.fromarray(img)
-    return cropped_data
