@@ -34,3 +34,14 @@ def check_import(module, to_use=None):
         else:
             error = 'You need {} to use {}. Try "pip install {}".'.format(module, to_use, module)
             raise ImportError(error)
+
+
+def count_layer(module, layer):
+    """Count number of times a layer is in a network."""
+    i = 0
+    if isinstance(module, layer):
+        return 1
+    else:
+        for m in module.children():
+            i += count_layer(m)
+    return i

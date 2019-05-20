@@ -1,6 +1,16 @@
 import torch.nn as nn
 
-from seq2seq.util.initialization import linear_init
+from skssl.utils.initialization import linear_init
+
+
+def ReversedConv2d(in_filter, out_filter, **kwargs):
+    """Called the exact same way as Conv2d => with same in and out filter!"""
+    return nn.ConvTranspose2d(out_filter, in_filter, **kwargs)
+
+
+def ReversedLinear(in_size, out_size, **kwargs):
+    """Called the exact same way as Linear => with same in and out dim!"""
+    return nn.Linear(out_size, in_size, **kwargs)
 
 
 class MLP(nn.Module):
