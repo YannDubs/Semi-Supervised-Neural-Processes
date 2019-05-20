@@ -7,6 +7,14 @@ class LabelSpreading(label_propagation.LabelSpreading):
     """
     Wrapper to change default hyperparameters and add `get_hypopt_search_space`.
     See documentation `sklearn.semi_supervised.LabelSpreading.
+
+    Method presented in [1]
+
+    References
+    ----------
+    [1] Zhou, D., Bousquet, O., Lal, T. N., Weston, J., & Schölkopf, B. (2004).
+        Learning with local and global consistency. In Advances in neural information
+        processing systems (pp. 321-328).
     """
 
     def __init__(self, kernel="knn", n_neighbors=1000, gamma=5, n_jobs=-1,

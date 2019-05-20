@@ -1,4 +1,28 @@
 import sys
+import math
+
+import warnings
+
+
+def is_valid_image_shape(shape):
+    """Check if is a valid image shape."""
+    if shape[1] != shape[2]:
+        warnings.warn("Framework not tested for not squared images ... Shape = {}".format(shape))
+    if shape[1] < 16:
+        warnings.warn("Framework not tested for images with width < 16 ... Shape = {}".format(shape))
+    if not is_power2(shape[1]):
+        warnings.warn("Framework not tested for images with width not power of 2 ... Shape = {}".format(shape))
+
+
+def closest_power2(n):
+    """Return the closest power of 2 by checking whether the second binary number is a 1."""
+    op = math.floor if bin(n)[3] != "1" else math.ceil
+    return 2**(op(math.log(n, 2)))
+
+
+def is_power2(num):
+    """Check if is a power of 2."""
+    return num != 0 and ((num & (num - 1)) == 0)
 
 
 def check_import(module, to_use=None):
