@@ -106,6 +106,11 @@ def get_train_dev_test_ssl(dataset,
 
 
 # POINT DATASETS
+def _set_shape(D, shape):
+    """Add a shape attribute to the dataset."""
+    D.shape = shape
+
+
 def generate_train_dev_test_ssl(dataset, n_label,
                                 n_unlabel=int(1e4),
                                 n_test=int(1e4),
@@ -186,9 +191,10 @@ def generate_train_dev_test_ssl(dataset, n_label,
         X_dev = np.dot(X_dev, transformation)
         X_test = np.dot(X_test, transformation)
 
-    return (skorch.dataset.Dataset(X_train, y=y_train),
-            skorch.dataset.Dataset(X_dev, y=y_dev),
-            skorch.dataset.Dataset(X_test, y=y_test))
+    # set a shape for compatibility
+    return (_set_shape(skorch.dataset.Dataset(X_train, y=y_train), (2,)),
+            _set_shape(skorch.dataset.Dataset(X_dev, y=y_dev), (2,)),
+            _set_shape(skorch.dataset.Dataset(X_test, y=y_test), (2,)))
 
 
 # IMAGE DATASETS
@@ -217,7 +223,7 @@ class CIFAR10(datasets.CIFAR10):
         (2018). Realistic evaluation of deep semi-supervised learning algorithms.
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
-    img_size = (3, 32, 32)
+    shape = (3, 32, 32)
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/CIFAR10'),
@@ -282,7 +288,7 @@ class SVHN(datasets.SVHN):
         (2018). Realistic evaluation of deep semi-supervised learning algorithms.
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
-    img_size = (3, 32, 32)
+    shape = (3, 32, 32)
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/SVHN'),
@@ -324,7 +330,7 @@ class MNIST(datasets.MNIST):
     kwargs:
         Additional arguments to `datasets.MNIST`.
     """
-    img_size = (1, 32, 32)
+    shape = (1, 32, 32)
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/MNIST'),

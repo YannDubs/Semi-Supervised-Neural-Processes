@@ -60,6 +60,10 @@ class DatasetSpliter(Dataset):
     def targets(self):
         return self.to_split.targets
 
+    @property
+    def shape(self):
+        return self.shape
+
 
 def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
     """Split a training dataset into a training and validation one.

@@ -6,6 +6,7 @@ doc/
 *archive*
 *test*
 !utils/data
+src/
 
 # Byte-compiled / optimized / DLL files
 *.egg-info
