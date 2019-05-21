@@ -26,8 +26,8 @@ class WideResNet(nn.Module):
         Shape of the input images. Only tested on square images with width being
         a power of 2 and greater or equal than 16. E.g. (1,32,32) or (3,64,64).
 
-    num_classes : int
-        Number of classes.
+    n_out : int
+        Number of outputs.
 
     n_res_unit : int, optional
         Number of residual layers for each of the 3 residual block.
@@ -50,11 +50,11 @@ class WideResNet(nn.Module):
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
 
-    def __init__(self, x_shape, num_classes, n_res_unit=4, widen_factor=2, leakiness=0.1,
+    def __init__(self, x_shape, n_out, n_res_unit=4, widen_factor=2, leakiness=0.1,
                  _Conv=nn.Conv2d, _Linear=nn.Linear, **kwargs):
         super().__init__()
 
-        is_valid_image_shape(x_shape)
+        is_valid_image_shape(x_shape, min_width=16)
         self.x_shape = x_shape
 
         n_chan = [self.x_shape[0], 16, 16 * widen_factor, 32 * widen_factor, 64 * widen_factor]
@@ -71,7 +71,7 @@ class WideResNet(nn.Module):
 
         self.bn = nn.BatchNorm2d(self.n_chan_fin, **BATCHNORM_KWARGS)
         self.act = nn.LeakyReLU(negative_slope=leakiness)
-        self.fc = _Linear(self.n_chan_fin, num_classes)
+        self.fc = _Linear(self.n_chan_fin, n_out)
 
     def forward(self, x):
         out = self.conv(x)
@@ -91,9 +91,9 @@ class ReversedWideResNet(WideResNet):
     are replaced with Transposed Convolutions.
     """
 
-    def __init__(self, x_shape, num_classes, **kwargs):
+    def __init__(self, x_shape, n_out, **kwargs):
 
-        super().__init__(x_shape, num_classes, _Conv=ReversedConv2d,
+        super().__init__(x_shape, n_out, _Conv=ReversedConv2d,
                          _Linear=ReversedLinear, is_reverse=True, **kwargs)
 
         self.fc2 = nn.Linear(self.n_chan_fin, self.n_chan_fin * 2)

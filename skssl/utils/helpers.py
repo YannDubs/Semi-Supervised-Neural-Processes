@@ -1,15 +1,33 @@
 import sys
 import math
-
 import warnings
 
+import torch.nn as nn
 
-def is_valid_image_shape(shape):
+
+def ReversedConv2d(in_filter, out_filter, **kwargs):
+    """Called the exact same way as Conv2d => with same in and out filter!"""
+    return nn.ConvTranspose2d(out_filter, in_filter, **kwargs)
+
+
+def ReversedLinear(in_size, out_size, **kwargs):
+    """Called the exact same way as Linear => with same in and out dim!"""
+    return nn.Linear(out_size, in_size, **kwargs)
+
+
+def identity(x):
+    """simple identity function"""
+    return x
+
+
+def is_valid_image_shape(shape, min_width=0, max_width=float("inf")):
     """Check if is a valid image shape."""
     if shape[1] != shape[2]:
         warnings.warn("Framework not tested for not squared images ... Shape = {}".format(shape))
-    if shape[1] < 16:
-        warnings.warn("Framework not tested for images with width < 16 ... Shape = {}".format(shape))
+    if shape[1] > max_width:
+        warnings.warn("Model only tested for images `width <= {}` ... Shape = {}".format(max_width, shape))
+    if shape[1] < min_width:
+        warnings.warn("Model only tested for images `width >= {}` ... Shape = {}".format(min_width, shape))
     if not is_power2(shape[1]):
         warnings.warn("Framework not tested for images with width not power of 2 ... Shape = {}".format(shape))
 

@@ -1,16 +1,7 @@
 import torch.nn as nn
 
 from skssl.utils.initialization import linear_init
-
-
-def ReversedConv2d(in_filter, out_filter, **kwargs):
-    """Called the exact same way as Conv2d => with same in and out filter!"""
-    return nn.ConvTranspose2d(out_filter, in_filter, **kwargs)
-
-
-def ReversedLinear(in_size, out_size, **kwargs):
-    """Called the exact same way as Linear => with same in and out dim!"""
-    return nn.Linear(out_size, in_size, **kwargs)
+from skssl.utils.helpers import identity
 
 
 class MLP(nn.Module):
@@ -33,15 +24,15 @@ class MLP(nn.Module):
                  hidden_size=32,
                  activation=nn.ReLU,
                  bias=True,
-                 dropout_input=0,
-                 dropout_hidden=0):
-        super(MLP, self).__init__()
+                 dropout=0):
+        super().__init__()
 
         self.input_size = input_size
         self.output_size = output_size
         self.hidden_size = min(self.input_size, max(hidden_size, self.output_size))
 
         self.to_hidden = nn.Linear(self.input_size, self.hidden_size, bias=bias)
+        self.dropout = (nn.Dropout(p=dropout) if dropout > 0 else identity)
         self.activation = activation()  # cannot be a function from Functional but class
         self.out = nn.Linear(self.hidden_size, self.output_size, bias=bias)
 
@@ -49,6 +40,7 @@ class MLP(nn.Module):
 
     def forward(self, x):
         y = self.to_hidden(x)
+        y = self.dropout(y)
         y = self.activation(y)
         y = self.out(y)
         return y

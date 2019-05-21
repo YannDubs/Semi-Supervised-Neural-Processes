@@ -126,10 +126,13 @@ class VAE(nn.Module, TransformerMixin):
     Parameters
     ----------
     encoder : nn.Module
-        Encoder module which maps x,y -> z.
+        Encoder module which maps x -> z. It should be callable with
+        `encoder(x_shape, n_out)`.
 
     decoder : nn.Module
-        Decoder module which maps z,y -> x.
+        Decoder module which maps z -> x. It should be callable with
+        `decoder(x_shape, n_out)`. No non linearities should be applied to the
+        output.
 
     x_shape : tuple of ints
         Shape of a single example x.
@@ -139,7 +142,7 @@ class VAE(nn.Module, TransformerMixin):
     """
 
     def __init__(self, encoder, decoder, x_shape, z_dim=10):
-        self.encoder = encoder(x_shape, z_dim)
+        self.encoder = encoder(x_shape, z_dim * 2)
         self.decoder = decoder(x_shape, z_dim)
         self.z_dim = z_dim
         self.x_shape = x_shape
@@ -162,9 +165,10 @@ class VAE(nn.Module, TransformerMixin):
             One hot encoded labels.
         """
         z_dist = self.encoder(X)
-        z_sample = self.reparameterize(*z_dist)
-        reconstruct = self.decoder(z_sample)
-        return reconstruct, z_dist, z_sample
+        mean, logvar = z_dist.view(-1, self.z_dim, 2).unbind(-1)
+        z_sample = self.reparameterize(mean, logvar)
+        reconstruct = torch.sigmoid(self.decoder(z_sample))
+        return reconstruct, (mean, logvar), z_sample
 
     def reparameterize(self, mean, logvar):
         """
@@ -186,7 +190,7 @@ class VAE(nn.Module, TransformerMixin):
             # Reconstruction mode
             return mean
 
-    def sample_decode(self, z, y):
+    def sample_decode(self, z):
         """
         Returns a sample from the decoder.
 
@@ -195,5 +199,5 @@ class VAE(nn.Module, TransformerMixin):
         z : torch.Tensor, size = [batch_size, latent_dim]
             Latent variable.
         """
-        sample = self.decoder(z)
+        sample = torch.sigmoid(self.decoder(z))
         return sample
