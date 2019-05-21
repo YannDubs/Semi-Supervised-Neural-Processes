@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from skssl.utils.helpers import is_valid_image_shape, closest_power2
-from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
+from skssl.predefined.torchextend import ReversedConv2d, ReversedLinear
 
 # to replicate https://github.com/brain-research/realistic-ssl-evaluation/
 CONV_KWARGS = dict(kernel_size=3, padding=1, bias=False)

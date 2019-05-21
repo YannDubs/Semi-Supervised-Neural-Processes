@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from skssl.utils.helpers import is_valid_image_shape, closest_power2
-from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
+from skssl.predefined.torchextend import ReversedConv2d, ReversedLinear
 
 
 class SimpleCNN(nn.Module):

@@ -1,5 +1,3 @@
-import torch
-
 from sklearn.base import ClassifierMixin
 
 from skssl.predefined.vae import VAE, VAELoss
