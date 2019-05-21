@@ -1,2 +1,3 @@
-#from .encoders import CNNEncoder, TwoDimEncoder
-#from .decoders import CNNDecoder, TwoDimDecoder
+from .cnn import SimpleCNN
+from .wideresnet import WideResNet
+from .mlp import MLP

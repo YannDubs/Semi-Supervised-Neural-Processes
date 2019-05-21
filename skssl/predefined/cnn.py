@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from skssl.helpers import is_valid_image_shape, closest_power2
+from skssl.utils.helpers import is_valid_image_shape, closest_power2
 from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
 
 
