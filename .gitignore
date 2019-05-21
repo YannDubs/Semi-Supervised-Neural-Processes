@@ -1,0 +1,41 @@
+# directories
+data/
+doc/
+*old*
+*backup*/
+*archive*
+*test*
+!utils/data
+
+# Byte-compiled / optimized / DLL files
+*.egg-info
+__pycache__/
+*.py[cod]
+*.egg*
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+notebooks/
+
+# Environments
+venv
+
+# Git
+.gitignore
+!.keep
+
+# Extensions
+*.pyc
+*.log
+*.sh
+*.tar
+*.zip
+*.tar
+*.sublime*
+*.swp
+*.out
+*.old
+*.idea
+*.bak
+*.npy
