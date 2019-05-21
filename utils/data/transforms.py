@@ -1,15 +1,10 @@
-"""
-all the following functions have been modified from
-`https://github.com/brain-research/realistic-ssl-evaluation/`
-for reproducability and also because tochvision buil-in transformation would
-require normalization -> to PIL -> flip, but cannot PIL normalized images
-as these are floats but shouldn't be multiplied by 255
-"""
-
 import os
 
+import torch
 from PIL import Image
 import numpy as np
+import joblib
+from sklearn.preprocessing import MinMaxScaler
 
 
 def precompute_batch_tranforms(X, y, basename,
@@ -70,6 +65,8 @@ def global_contrast_normalization(images, multiplier=55, eps=1e-10):
     -----
     - Compared to the notation in the the `Deep Learning` book(p 445), `lambda=0`
         `s = multiplier`.
+    - modified from `https://github.com/brain-research/realistic-ssl-evaluation/`
+    for reproducability.
 
     Parameters
     ----------
@@ -95,7 +92,7 @@ def global_contrast_normalization(images, multiplier=55, eps=1e-10):
     return images.reshape(*shape)
 
 
-def get_zca_params(images, root_path, identity_scale=0.1, eps=1e-10):
+def get_zca_params(images, root_path, identity_scale=0.1, eps=1e-10, is_load=False):
     """Creates function performing ZCA normalization on a numpy array of images.
 
     Parameters
@@ -115,11 +112,12 @@ def get_zca_params(images, root_path, identity_scale=0.1, eps=1e-10):
     mean_path = os.path.join(root_path, "zca_mean.npy")
     decomp_path = os.path.join(root_path, "zca_decomp.npy")
 
-    if os.path.exists(mean_path) and os.path.exists(decomp_path):
+    if is_load or (os.path.exists(mean_path) and os.path.exists(decomp_path)):
         image_mean = np.load(mean_path)
         zca_decomp = np.load(decomp_path)
 
     else:
+        # never when testing
         shape = images.shape
         images = images.reshape(shape[0], -1)
 
@@ -138,7 +136,7 @@ def get_zca_params(images, root_path, identity_scale=0.1, eps=1e-10):
     return image_mean, zca_decomp
 
 
-def zca_whitening(images, root, is_load=False, **kwargs):
+def zca_whitening(images, root, **kwargs):
     """
     Apply a ZCA normalization on a batch array and save the useds parameters.
 
@@ -147,6 +145,11 @@ def zca_whitening(images, root, is_load=False, **kwargs):
     variance=1 => becomes white noise). By removing 2 order correlation, it
     forces the mdoel to focus on high order correlation (multiple pixels) rather
     than "learning" that neighbouring pictures are similar.
+
+    Notes
+    -----
+    - modified from `https://github.com/brain-research/realistic-ssl-evaluation/`
+    for reproducability.
 
     Parameters
     ----------
@@ -159,26 +162,17 @@ def zca_whitening(images, root, is_load=False, **kwargs):
     kwargs :
         Additional arguments to `get_zca_params`.
     """
-    image_mean, zca_decomp = get_zca_params(images, root)
+    image_mean, zca_decomp = get_zca_params(images, root, **kwargs)
     shape = images.shape
     images = images.reshape(shape[0], -1)
     return np.dot(images - image_mean, zca_decomp).reshape(*shape)
 
 
 # SINGLE IMAGE TRANSFORMS
-def horizontal_flip(img):
-    """Random horizontal flips with proba 0.5 on np.ndarray(H W C)."""
-    idx_w = 1
-    flipped_img = np.flip(img, idx_w)
-    is_flips = np.random.randint(0, 2, size=[1, 1, 1]).astype(np.float32)
-    return is_flips * img + (1 - is_flips) * flipped_img
-
-
 def random_translation(img, max_pix):
     """
     Random translations of 0 to max_pix given np.ndarray or PIL.Image(H W C).
     """
-
     is_pil = not isinstance(img, np.ndarray)
     if is_pil:
         img = np.atleast_3d(np.asarray(img))
@@ -191,3 +185,42 @@ def random_translation(img, max_pix):
     if is_pil:
         img = Image.fromarray(img.squeeze())
     return cropped_data
+
+
+def gaussian_noise(x, std=1, **kwargs):
+    """Add Gaussian noise and clips the output."""
+    return torch.clamp(x + torch.randn_like(x) * std, **kwargs)
+
+
+class RobustMinMaxScaler(MinMaxScaler):
+    """MinMaxScaling after clamping outliers."""
+
+    def __init__(self, quantile=1e-2, **kwargs):
+        super().__init__(**kwargs)
+        self.quantile = quantile
+
+    def partial_fit(self, X, y=None):
+        X = X.clip(np.quantile(X, self.quantile, axis=0, keepdims=True),
+                   np.quantile(X, 1 - self.quantile, axis=0, keepdims=True))
+        super().partial_fit(X, y=y)
+        return self
+
+    def transform(self, X):
+        X = super().transform(X)
+        # clipping before or after transform is same because lienar
+        return X.clip(self.feature_range[0], self.feature_range[1])
+
+
+def robust_minmax_scale(images, root_path, quantile=5e-4,
+                        feature_range=(0, 1), is_load=False):
+
+    scaler_path = os.path.join(root_path, "robust_scaler.npy")
+
+    if is_load or os.path.exists(scaler_path):
+        scaler = joblib.load(scaler_path)
+    else:
+        scaler = RobustMinMaxScaler(quantile=quantile, feature_range=feature_range)
+        scaler.fit(images.reshape((-1, 1)))
+        joblib.dump(scaler, scaler_path)
+
+    return scaler.transform(images.reshape((-1, 1))).reshape(images.shape)

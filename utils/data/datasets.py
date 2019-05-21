@@ -4,7 +4,7 @@ import logging
 from PIL import Image
 import numpy as np
 import sklearn.datasets
-import torch
+import joblib
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
 from torchvision.transforms.functional import to_tensor
@@ -12,7 +12,8 @@ import skorch.dataset
 
 from .helpers import train_dev_split, make_ssl_dataset_
 from .transforms import (precompute_batch_tranforms, global_contrast_normalization,
-                         zca_whitening, random_translation, horizontal_flip)
+                         zca_whitening, random_translation, robust_minmax_scale,
+                         gaussian_noise)
 
 DIR = os.path.abspath(os.path.dirname(__file__))
 
@@ -196,7 +197,8 @@ class CIFAR10(datasets.CIFAR10):
 
     Notes
     -----
-    - Transformations (and their order) follow [1].
+    - Transformations (and their order) follow [1] besides the fact that we scale
+    the images to be in [0,1] to make it easier to use probabilistic generative models.
 
     Parameters
     ----------
@@ -224,11 +226,11 @@ class CIFAR10(datasets.CIFAR10):
                  **kwargs):
 
         if split == "train":
-            transforms_list = [transforms.Lambda(lambda x: horizontal_flip(x)),
+            transforms_list = [transforms.RandomHorizontalFlip(),
                                transforms.Lambda(lambda x: random_translation(x, 2)),
                                transforms.ToTensor(),
-                               # adding random noise of std 0.15
-                               transforms.Lambda(lambda x: x + torch.randn_like(x) * 0.15)]
+                               # adding random noise of std 0.15 but clip to 0,1
+                               transforms.Lambda(lambda x: gaussian_noise(x, std=0.15 * self.noise_factor, min=0, max=1))]
         elif split == "test":
             transforms_list = [transforms.ToTensor()]
         else:
@@ -243,23 +245,15 @@ class CIFAR10(datasets.CIFAR10):
         basename = os.path.join(root, "clean_{}".format(split))
         transforms_X = [global_contrast_normalization,
                         lambda x: zca_whitening(x, root, is_load=split == "test"),
-                        lambda x: x.astype(np.float32)]
+                        lambda x: robust_minmax_scale(x, root, is_load=split == "test"),
+                        lambda x: (x * 255).astype(np.uint8)]  # back to 255 for PIL
         self.data, self.targets = precompute_batch_tranforms(self.data, self.targets, basename,
                                                              transforms_X=transforms_X,
                                                              logger=logger)
 
-    def __getitem__(self, index):
-        """Changes dfault to not convert to PIL due to preprocessing"""
-        img, target = self.data[index], self.targets[index]
-
-        # removed PIL conversion due to preprocessing => bad type
-        if self.transform is not None:
-            img = self.transform(img)
-
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-        return img, target
+        # DIRTY make sure that the noise added is also scaled
+        robust_scaler = joblib.load(os.path.join(root, "robust_scaler.npy"))
+        self.noise_factor = 1 / robust_scaler.data_range_[0]
 
 
 class SVHN(datasets.SVHN):
@@ -267,7 +261,9 @@ class SVHN(datasets.SVHN):
 
     Notes
     -----
-    - Transformations (and their order) follow [1].
+    - Transformations (and their order) follow [1] besides the fact that we scale
+    the images to be in [0,1] isntead of [-1,1] to make it easier to use
+    probabilistic generative models.
 
     Parameters
     ----------
@@ -296,10 +292,9 @@ class SVHN(datasets.SVHN):
 
         if split == "train":
             transforms_list = [transforms.Lambda(lambda x: random_translation(x, 2)),
-                               # put image in [-1,1]
-                               transforms.Lambda(lambda x: (to_tensor(x) - 0.5) * 2)]
+                               transforms.ToTensor()]
         elif split == "test":
-            transforms_list = [transforms.Lambda(lambda x: (to_tensor(x) - 0.5) * 2)]
+            transforms_list = [transforms.ToTensor()]
         else:
             raise ValueError("Unkown `split = {}`".format(split))
 
