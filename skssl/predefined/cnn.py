@@ -3,8 +3,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from skssl.utils.helpers import is_valid_image_shape, closest_power2
-from skssl.predefined.torchextend import ReversedConv2d, ReversedLinear
+from skssl.utils.helpers import (is_valid_image_shape, closest_power2,
+                                 ReversedConv2d, ReversedLinear)
 
 
 class SimpleCNN(nn.Module):
