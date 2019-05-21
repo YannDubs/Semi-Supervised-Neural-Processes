@@ -62,7 +62,7 @@ class DatasetSpliter(Dataset):
 
     @property
     def shape(self):
-        return self.shape
+        return self.to_split.shape
 
 
 def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
