@@ -3,8 +3,9 @@ import numpy as np
 import torch
 from torch import nn
 
-from skssl.utils.helpers import (is_valid_image_shape, closest_power2,
-                                 ReversedConv2d, ReversedLinear)
+from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
+from skssl.utils.helpers import (is_valid_image_shape, closest_power2)
+from skssl.utils.initialization import weights_init
 
 
 class SimpleCNN(nn.Module):
@@ -36,7 +37,7 @@ class SimpleCNN(nn.Module):
         self.x_shape = x_shape
 
         self.reshape = (hid_channels, kernel_size, kernel_size)
-        n_chan = self.img_size[0]
+        n_chan = self.x_shape[0]
 
         # Convolutional layers
         cnn_kwargs = dict(stride=2, padding=1)
@@ -45,13 +46,18 @@ class SimpleCNN(nn.Module):
         self.conv3 = _Conv(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
 
         # If input image is 64x64 do fourth convolution
-        if self.img_size[1] == self.img_size[2] == 64:
+        if self.x_shape[1] == self.x_shape[2] == 64:
             self.conv_64 = _Conv(hid_channels, hid_channels, kernel_size, **cnn_kwargs)
 
         # Fully connected layers
         self.lin1 = _Linear(np.product(self.reshape), hidden_dim)
         self.lin2 = _Linear(hidden_dim, hidden_dim)
         self.lin3 = _Linear(hidden_dim, self.n_out)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        weights_init(self)
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -60,7 +66,7 @@ class SimpleCNN(nn.Module):
         x = torch.relu(self.conv1(x))
         x = torch.relu(self.conv2(x))
         x = torch.relu(self.conv3(x))
-        if self.img_size[1] == self.img_size[2] == 64:
+        if self.x_shape[1] == self.x_shape[2] == 64:
             x = torch.relu(self.conv_64(x))
 
         # Fully connected layers with ReLu activations
@@ -91,7 +97,7 @@ class ReversedSimpleCNN(SimpleCNN):
         x = torch.relu(self.lin1(x))
         x = x.view(batch_size, *self.reshape)
 
-        if self.img_size[1] == self.img_size[2] == 64:
+        if self.x_shape[1] == self.x_shape[2] == 64:
             x = torch.relu(self.conv_64(x))
         x = torch.relu(self.conv3(x))
         x = torch.relu(self.conv2(x))

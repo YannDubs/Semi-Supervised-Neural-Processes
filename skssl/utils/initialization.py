@@ -58,24 +58,20 @@ def linear_init(module, activation="relu"):
         return nn.init.xavier_uniform_(x, gain=get_gain(activation))
 
 
-def weights_init(module):
-    """Initialize a module.
+def weights_init(module, **kwargs):
+    """Initialize a module and all its descendents.
 
     Parameters
     ----------
     module : nn.Module
        module to initialize.
     """
-    try:
-        module.reset_parameters()
-    except AttributeError:
-        pass
-
-    if isinstance(module, torch.nn.modules.conv._ConvNd):
-        # used in https://github.com/brain-research/realistic-ssl-evaluation/
-        nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
-    elif isinstance(module, nn.Linear):
-        linear_init(module)
-    elif isinstance(module, nn.BatchNorm2d):
-        module.weight.data.fill_(1)
-        module.bias.data.zero_()
+    for m in module.modules():
+        if isinstance(m, torch.nn.modules.conv._ConvNd):
+            # used in https://github.com/brain-research/realistic-ssl-evaluation/
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", **kwargs)
+        elif isinstance(m, nn.Linear):
+            linear_init(m, **kwargs)
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()

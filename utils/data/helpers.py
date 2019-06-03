@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.model_selection import train_test_split
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from sklearn.model_selection import PredefinedSplit
 
 UNLABELLED_CLASS = -1
@@ -22,32 +22,41 @@ def make_ssl_dataset_(supervised, n_labels,
                       unlabeled_class=UNLABELLED_CLASS, seed=123, is_stratify=True):
     """Take a supervised dataset and turn it into an unsupervised one(inplace),
     by giving a special unlabeled class as target."""
-    n_all = len(supervised)
-    if hasattr(supervised, "idx_mapping"):  # if splitted dataset
-        idcs_all = supervised.idx_mapping
-    else:
-        idcs_all = list(range(n_all))
-
-    stratify = [supervised.targets[i] for i in idcs_all] if is_stratify else None
-    idcs_unlabel, indcs_labels = train_test_split(idcs_all,
+    stratify = supervised.targets if is_stratify else None
+    idcs_unlabel, indcs_labels = train_test_split(list(range(len(supervised))),
                                                   stratify=stratify,
                                                   test_size=n_labels,
                                                   random_state=seed)
 
     supervised.n_labels = len(indcs_labels)
-    for i in idcs_unlabel:
-        supervised.targets[i] = unlabeled_class
+    # cannot set _DatasetSubset through indexing
+    targets = supervised.targets
+    targets[idcs_unlabel] = unlabeled_class
+    supervised.targets = targets
 
 
-class DatasetSpliter(Dataset):
+class _DatasetSubset(Dataset):
     """Helper to split train dataset into train and dev dataset.
 
-    Credits: https: // gist.github.com / Fuchai / 12f2321e6c8fa53058f5eb23aeddb6ab
+    Parameters
+    ----------
+    to_split: Dataset
+        Dataset to subset.
+
+    idx_mapping: array-like
+        Indices of the subset.
+
+    Notes
+    -----
+    - Modified from: https: // gist.github.com / Fuchai / 12f2321e6c8fa53058f5eb23aeddb6ab
+    - Does modify the length and targets with indexing anymore! I.e.
+    `d.targets[1]=-1` doesn't work because np.array doesn't allow `arr[i][j]=-1`
+    but you can do `d.targets=targets`
     """
 
-    def __init__(self, to_split, length, idx_mapping):
+    def __init__(self, to_split, idx_mapping):
         self.idx_mapping = idx_mapping
-        self.length = length
+        self.length = len(idx_mapping)
         self.to_split = to_split
 
     def __getitem__(self, index):
@@ -58,11 +67,18 @@ class DatasetSpliter(Dataset):
 
     @property
     def targets(self):
-        return self.to_split.targets
+        return self.to_split.targets[self.idx_mapping]
+
+    @targets.setter
+    def targets(self, values):
+        self.to_split.targets[self.idx_mapping] = values
 
     @property
-    def shape(self):
-        return self.to_split.shape
+    def data(self):
+        return self.to_split.data[self.idx_mapping]
+
+    def __getattr__(self, attr):
+        return getattr(self.to_split, attr)
 
 
 def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
@@ -88,9 +104,7 @@ def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
                                              stratify=stratify,
                                              test_size=dev_size,
                                              random_state=seed)
-
-    n_val = len(indcs_val)
-    train = DatasetSpliter(to_split, n_all - n_val, idcs_train)
-    valid = DatasetSpliter(to_split, n_val, indcs_val)
+    train = _DatasetSubset(to_split, idcs_train)
+    valid = _DatasetSubset(to_split, indcs_val)
 
     return train, valid

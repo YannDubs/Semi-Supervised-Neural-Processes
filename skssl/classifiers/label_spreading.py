@@ -4,18 +4,12 @@ from skopt.space import Real, Categorical, Integer
 
 
 class LabelSpreading(label_propagation.LabelSpreading):
-    """
+    __doc__ = """
     Wrapper to change default hyperparameters and add `get_hypopt_search_space`.
     See documentation `sklearn.semi_supervised.LabelSpreading.
 
-    Method presented in [1]
-
-    References
-    ----------
-    [1] Zhou, D., Bousquet, O., Lal, T. N., Weston, J., & Schölkopf, B. (2004).
-        Learning with local and global consistency. In Advances in neural information
-        processing systems (pp. 321-328).
-    """
+    Base documentation:
+    """ + label_propagation.LabelSpreading.__doc__
 
     def __init__(self, kernel="knn", n_neighbors=1000, gamma=5, n_jobs=-1,
                  max_iter=30, alpha=0.2, tol=0.001):

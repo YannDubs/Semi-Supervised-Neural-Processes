@@ -6,6 +6,7 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 def plot_2D_decision_boundary_SSL(X, y, model,
                                   title=None,
                                   mesh_stepsize=0.1,
+                                  ax=None,
                                   scatter_kwargs={-1: {"c": "whitesmoke", "alpha": 0.4,
                                                        "linewidths": 0.5, "s": 10},
                                                   0: {"c": "b", "linewidths": 0.7, "s": 50},
@@ -15,19 +16,22 @@ def plot_2D_decision_boundary_SSL(X, y, model,
 
     Parameters
     ----------
-    X : array-like
+    X: array-like
         2D input data
 
-    y : array-like
+    y: array-like
         Labels, with `-1` for unlabeled points. Currently works with max 3 classes.
 
-    model : sklearn.BaseEstimator
+    model: sklearn.BaseEstimator
         Trained model. If `None` plot the dataset only.
 
-    title : str, optional
+    title: str, optional
         Title to add.
 
-    mesh_stepsize : float, optional
+    ax: matplotlib.axes, optional
+        Axis on which to plot.
+
+    mesh_stepsize: float, optional
         Step size of the mesh. Decrease to increase the quality. .02 is a good value
         for nice quality, 0.1 is faster but still ok.
     """
@@ -38,7 +42,8 @@ def plot_2D_decision_boundary_SSL(X, y, model,
         cm.set_over(alpha=0)
         return cm
 
-    F, ax = plt.subplots(1, 1, figsize=(7, 7))
+    if ax is not None:
+        F, ax = plt.subplots(1, 1, figsize=(7, 7))
 
     x_min, x_max = X[:, 0].min() - .5, X[:, 0].max() + .5
     y_min, y_max = X[:, 1].min() - .5, X[:, 1].max() + .5

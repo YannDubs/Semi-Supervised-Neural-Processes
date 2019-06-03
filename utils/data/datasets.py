@@ -10,6 +10,7 @@ from torchvision import transforms, datasets
 from torchvision.transforms.functional import to_tensor
 import skorch.dataset
 
+from utils.helpers import set_attributes
 from .helpers import train_dev_split, make_ssl_dataset_
 from .transforms import (precompute_batch_tranforms, global_contrast_normalization,
                          zca_whitening, random_translation, robust_minmax_scale,
@@ -106,11 +107,6 @@ def get_train_dev_test_ssl(dataset,
 
 
 # POINT DATASETS
-def _set_shape(D, shape):
-    """Add a shape attribute to the dataset."""
-    D.shape = shape
-
-
 def generate_train_dev_test_ssl(dataset, n_label,
                                 n_unlabel=int(1e4),
                                 n_test=int(1e4),
@@ -191,10 +187,11 @@ def generate_train_dev_test_ssl(dataset, n_label,
         X_dev = np.dot(X_dev, transformation)
         X_test = np.dot(X_test, transformation)
 
-    # set a shape for compatibility
-    return (_set_shape(skorch.dataset.Dataset(X_train, y=y_train), (2,)),
-            _set_shape(skorch.dataset.Dataset(X_dev, y=y_dev), (2,)),
-            _set_shape(skorch.dataset.Dataset(X_test, y=y_test), (2,)))
+    # set a shape and n_classes for compatibility
+    att = dict(shape=(2,), n_classes=3)
+    return (set_attributes(skorch.dataset.Dataset(X_train.astype(np.float32), y=y_train), **att),
+            set_attributes(skorch.dataset.Dataset(X_dev.astype(np.float32), y=y_dev), **att),
+            set_attributes(skorch.dataset.Dataset(X_test.astype(np.float32), y=y_test), **att))
 
 
 # IMAGE DATASETS
@@ -224,6 +221,7 @@ class CIFAR10(datasets.CIFAR10):
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
     shape = (3, 32, 32)
+    n_classes = 10
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/CIFAR10'),
@@ -289,6 +287,7 @@ class SVHN(datasets.SVHN):
         In Advances in Neural Information Processing Systems (pp. 3235-3246).
     """
     shape = (3, 32, 32)
+    n_classes = 10
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/SVHN'),
@@ -331,6 +330,7 @@ class MNIST(datasets.MNIST):
         Additional arguments to `datasets.MNIST`.
     """
     shape = (1, 32, 32)
+    n_classes = 10
 
     def __init__(self,
                  root=os.path.join(DIR, '../../data/MNIST'),

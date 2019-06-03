@@ -1,15 +1,19 @@
 import math
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from skssl.utils.helpers import (is_valid_image_shape, closest_power2,
-                                 ReversedConv2d, ReversedLinear)
+from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
+from skssl.utils.helpers import (is_valid_image_shape, closest_power2)
+from skssl.utils.initialization import weights_init
 
 # to replicate https://github.com/brain-research/realistic-ssl-evaluation/
 CONV_KWARGS = dict(kernel_size=3, padding=1, bias=False)
-BATCHNORM_KWARGS = dict(momentum=1e-3)
+# The implementation above uses default tensorflow batch norm aruments so
+# momentum = 1 - 0.999 = 1e-3. But this doesn't work with pytorch, probably due
+# how the moving average is intialized (i.e would take too many steps to
+# find good values in pytorch because bad init) => use pytorch default
+BATCHNORM_KWARGS = dict(momentum=1e-1)
 
 
 class WideResNet(nn.Module):
@@ -63,25 +67,30 @@ class WideResNet(nn.Module):
         # padding 1 gives same output size in our case (pytorch doesn't suport "SAME")
         self.conv = _Conv(n_chan[0], n_chan[1], stride=1, **CONV_KWARGS)
         self.block1 = _get_res_block(n_res_unit, n_chan[1], n_chan[2], 1,
-                                     leakiness, True, **kwargs)
+                                     leakiness, True, **kwargs)  # check TRUE
         self.block2 = _get_res_block(n_res_unit, n_chan[2], n_chan[3], 2,
-                                     leakiness, False, **kwargs)
+                                     leakiness, False, **kwargs)  # check FALSE
         self.block3 = _get_res_block(n_res_unit, n_chan[3], self.n_chan_fin, 2,
-                                     leakiness, False, **kwargs)
+                                     leakiness, False, **kwargs)  # check FALSE
 
         self.bn = nn.BatchNorm2d(self.n_chan_fin, **BATCHNORM_KWARGS)
         self.act = nn.LeakyReLU(negative_slope=leakiness)
         self.fc = _Linear(self.n_chan_fin, n_out)
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        weights_init(self)
+
     def forward(self, x):
         out = self.conv(x)
-        out = self.block1(out)
-        out = self.block2(out)
-        out = self.block3(out)
-        out = self.act(self.bn(out))
+        out = self.block1(out)  # check
+        out = self.block2(out)  # check
+        out = self.block3(out)  # check
+        out = self.act(self.bn(out))  # check
         # global average over all pixels left
-        out = F.adaptive_avg_pool2d(out, 1).view(-1, self.n_chan_fin)
-        return self.fc(out)
+        out = F.adaptive_avg_pool2d(out, 1).view(-1, self.n_chan_fin)  # check
+        return self.fc(out)  # check
 
 
 class ReversedWideResNet(WideResNet):
@@ -109,6 +118,11 @@ class ReversedWideResNet(WideResNet):
             tmp_upsampling.append(self.act)
         self.tmp_upsampling = nn.Sequential(*tmp_upsampling) if len(tmp_upsampling) != 0 else None
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        weights_init(self)
+
     def forward(self, x):
         batch_size = x.size(0)
         out = self.act(self.fc(x))
@@ -127,8 +141,7 @@ class ReversedWideResNet(WideResNet):
         out = self.block1(out)
         out = self.conv(out)
 
-        # all images in this framework are scaled in [0,1]
-        return torch.sigmoid(out)
+        return out
 
 
 def _get_res_block(n_layers, in_filter, out_filter, stride, leakiness,
