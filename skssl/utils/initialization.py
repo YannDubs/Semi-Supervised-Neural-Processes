@@ -2,6 +2,25 @@ import torch
 from torch import nn
 
 
+def weights_init(module, **kwargs):
+    """Initialize a module and all its descendents.
+
+    Parameters
+    ----------
+    module : nn.Module
+       module to initialize.
+    """
+    for m in module.modules():
+        if isinstance(m, torch.nn.modules.conv._ConvNd):
+            # used in https://github.com/brain-research/realistic-ssl-evaluation/
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", **kwargs)
+        elif isinstance(m, nn.Linear):
+            linear_init(m, **kwargs)
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.fill_(1)
+            m.bias.data.zero_()
+
+
 def get_activation_name(activation):
     """Given a string or a `torch.nn.modules.activation` return the name of the activation."""
     if isinstance(activation, str):
@@ -56,22 +75,3 @@ def linear_init(module, activation="relu"):
         return nn.init.kaiming_uniform_(x, nonlinearity='relu')
     elif activation_name in ["sigmoid", "tanh"]:
         return nn.init.xavier_uniform_(x, gain=get_gain(activation))
-
-
-def weights_init(module, **kwargs):
-    """Initialize a module and all its descendents.
-
-    Parameters
-    ----------
-    module : nn.Module
-       module to initialize.
-    """
-    for m in module.modules():
-        if isinstance(m, torch.nn.modules.conv._ConvNd):
-            # used in https://github.com/brain-research/realistic-ssl-evaluation/
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", **kwargs)
-        elif isinstance(m, nn.Linear):
-            linear_init(m, **kwargs)
-        elif isinstance(m, nn.BatchNorm2d):
-            m.weight.data.fill_(1)
-            m.bias.data.zero_()

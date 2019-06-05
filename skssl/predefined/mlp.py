@@ -5,6 +5,8 @@ import torch.nn as nn
 from skssl.utils.initialization import linear_init
 from skssl.utils.torchextend import identity
 
+__all__ = ["MLP"]
+
 
 class MLP(nn.Module):
     """General MLP class.

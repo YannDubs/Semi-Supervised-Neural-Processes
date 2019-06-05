@@ -7,6 +7,8 @@ from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
 from skssl.utils.helpers import (is_valid_image_shape, closest_power2)
 from skssl.utils.initialization import weights_init
 
+__all__ = ["SimpleCNN", "ReversedSimpleCNN"]
+
 
 class SimpleCNN(nn.Module):
     def __init__(self, x_shape, n_out, _Conv=nn.Conv2d, _Linear=nn.Linear):
@@ -84,8 +86,8 @@ class ReversedSimpleCNN(SimpleCNN):
     Transposed Convolutions.
     """
 
-    def __init__(self, x_shape, n_out):
-        super().__init__(x_shape, n_out,
+    def __init__(self, n_out, x_shape_out):
+        super().__init__(x_shape_out, n_out,  # reverses input, output
                          _Conv=ReversedConv2d, _Linear=ReversedLinear)
 
     def forward(self, x):

@@ -7,6 +7,8 @@ from skssl.utils.torchextend import ReversedConv2d, ReversedLinear
 from skssl.utils.helpers import (is_valid_image_shape, closest_power2)
 from skssl.utils.initialization import weights_init
 
+__all__ = ["WideResNet", "ReversedWideResNet"]
+
 # to replicate https://github.com/brain-research/realistic-ssl-evaluation/
 CONV_KWARGS = dict(kernel_size=3, padding=1, bias=False)
 # The implementation above uses default tensorflow batch norm aruments so
@@ -100,10 +102,13 @@ class ReversedWideResNet(WideResNet):
     are replaced with Transposed Convolutions.
     """
 
-    def __init__(self, x_shape, n_out, **kwargs):
+    def __init__(self, n_in, x_shape_out, **kwargs):
 
-        super().__init__(x_shape, n_out, _Conv=ReversedConv2d,
-                         _Linear=ReversedLinear, is_reverse=True, **kwargs)
+        super().__init__(x_shape_out, n_in,  # reverses
+                         is_reverse=True,
+                         _Conv=ReversedConv2d,
+                         _Linear=ReversedLinear,
+                         **kwargs)
 
         self.fc2 = nn.Linear(self.n_chan_fin, self.n_chan_fin * 2)
         self.fc3 = nn.Linear(self.n_chan_fin * 2, self.n_chan_fin * 4)

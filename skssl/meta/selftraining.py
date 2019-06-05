@@ -3,6 +3,7 @@ import warnings
 from sklearn.base import BaseEstimator, MetaEstimatorMixin
 import numpy as np
 
+__all__ = ["SelfTrainingMeta"]
 
 class SelfTrainingMeta(MetaEstimatorMixin, BaseEstimator):
     """

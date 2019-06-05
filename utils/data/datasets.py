@@ -7,8 +7,9 @@ import sklearn.datasets
 import joblib
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
-from torchvision.transforms.functional import to_tensor
+
 import skorch.dataset
+from skorch.utils import to_numpy
 
 from utils.helpers import set_attributes
 from .helpers import train_dev_split, make_ssl_dataset_
@@ -29,7 +30,7 @@ DATASETS_DICT = {"cifar10": "CIFAR10",
 DATASETS = list(DATASETS_DICT.keys())
 N_LABELS = {"cifar10": 4000,
             "svhn": 1000,
-            "mnist": 30,
+            "mnist": 100,
             "pts_circles": 10,
             "pts_moons": 6,
             "pts_var_gaus": 12,
@@ -254,6 +255,7 @@ class CIFAR10(datasets.CIFAR10):
         self.data, self.targets = precompute_batch_tranforms(self.data, self.targets, basename,
                                                              transforms_X=transforms_X,
                                                              logger=logger)
+        self.targets = to_numpy(self.targets)
 
         # DIRTY make sure that the noise added is also scaled
         robust_scaler = joblib.load(os.path.join(root, "robust_scaler.npy"))
@@ -309,6 +311,8 @@ class SVHN(datasets.SVHN):
                          transform=transforms.Compose(transforms_list),
                          **kwargs)
 
+        self.labels = to_numpy(self.labels)
+
     @property
     def targets(self):
         # make compatible with CIFAR10 dataset
@@ -352,3 +356,5 @@ class MNIST(datasets.MNIST):
                          download=True,
                          transform=transforms.Compose(transforms_list),
                          **kwargs)
+
+        self.targets = to_numpy(self.targets)

@@ -7,12 +7,13 @@ from sklearn.pipeline import Pipeline
 
 from skorch.callbacks import ProgressBar, Checkpoint, TrainEndCheckpoint
 
-from skssl.training import NeuralNetEstimator, NeuralNetClassifier, get_supervised_iterator
-from skssl.transformers.vae import VAE, VAELoss
+from skssl.training import NeuralNetEstimator, NeuralNetClassifier
+from skssl.training.loaders import get_supervised_iterator
+from skssl.transformers import VAE, VAELoss
 from skssl.predefined import (WideResNet, ReversedWideResNet, ReversedSimpleCNN,
                               SimpleCNN, MLP)
-from skssl.classifiers.sslvae import SSLVAELoss, SSLVAE
-from skssl.utils.helpers import FixRandomSeed
+from skssl.classifiers import SSLVAELoss, SSLVAE, make_ssl_encoder
+from skssl.training.helpers import FixRandomSeed
 from utils.data.datasets import get_dataset, get_train_dev_test_ssl
 from utils.helpers import FormatterNoDuplicate
 
@@ -60,12 +61,10 @@ def _get_enc_dec(enc_dec):
     return encoder, decoder
 
 
-def add_vae(net, is_vae, dataset, z_dim):
-    if is_vae:
-        vae = load_pretrained("vae", dataset, z_dim=z_dim).freeze()
-        return Pipeline([('m1', vae), ('classifier', net)])
-    else:
-        return net
+def add_vae(net, dataset):
+    """Make a pipeline with a pretrained VAE as transformer."""
+    vae = load_pretrained("vae", dataset).freeze()
+    return Pipeline([('m1', vae), ('classifier', net)])
 
 
 def _pretrained_supervised(dataset,
@@ -78,6 +77,9 @@ def _pretrained_supervised(dataset,
 
     Parameters
     ----------
+    dataset: str
+        Name of dataset.
+
     z_dim: int, optional
         Number of latent dimensions.
 
@@ -89,9 +91,6 @@ def _pretrained_supervised(dataset,
 
     max_epochs: int, optional
         Number of epochs if `is_retrain`.
-
-    z_dim: int, optional
-        Number of latent dimensions. Only used if `is_vae`.
     """
 
     if is_retrain:
@@ -115,12 +114,14 @@ def _pretrained_supervised(dataset,
                                          iterator_train=get_supervised_iterator,
                                          **kwargs)
     if is_retrain:
-        net = add_vae(net, is_vae, dataset, z_dim)
+        if is_vae:
+            net = add_vae(net, dataset)
         net.fit(train, train.targets)
     else:
         net.initialize()
         net.load_params(checkpoint=chckpt)
-        net = add_vae(net, is_vae, dataset, z_dim)
+        if is_vae:
+            net = add_vae(net, dataset)
 
     return net
 
@@ -135,6 +136,9 @@ def _pretrained_vae(dataset,
 
     Parameters
     ----------
+    dataset: str
+        Name of dataset.
+
     z_dim: int, optional
         Number of latent dimensions.
 
@@ -156,9 +160,10 @@ def _pretrained_vae(dataset,
         x_shape = get_dataset(dataset).shape
 
     encoder, decoder = _get_enc_dec(enc_dec)
-    vae = VAE(encoder, decoder, x_shape, z_dim=z_dim)
+    vae = VAE(x_shape, Encoder=encoder, Decoder=decoder, z_dim=z_dim)
 
-    net, chckpt = instantiate_mod_chckpt(vae, VAELoss, "vae/{}_{}".format(enc_dec, dataset),
+    net, chckpt = instantiate_mod_chckpt(vae, VAELoss,
+                                         "vae/{}_z{}_{}".format(enc_dec, z_dim, dataset),
                                          is_ssl=False,
                                          dev=dev,
                                          criterion__distribution="laplace",
@@ -177,12 +182,15 @@ def _pretrained_sslvae(dataset,
                        mode="m2",
                        is_retrain=False,
                        max_epochs=100,
-                       z_dim=64,
+                       z_dim=32,
                        **kwargs):
     """Load a pretrained vae.
 
     Parameters
     ----------
+    dataset: str
+        Name of dataset.
+
     z_dim: int, optional
         Number of latent dimensions.
 
@@ -217,21 +225,24 @@ def _pretrained_sslvae(dataset,
     else:
         raise ValueError()
 
-    sslvae = SSLVAE(make_ssl_encoder(encoder), decoder, x_shape, z_dim=z_dim)
+    sslvae = SSLVAE(x_shape, Encoder=make_ssl_encoder(encoder), Decoder=decoder, z_dim=z_dim)
 
-    net, chckpt = instantiate_mod_chckpt(sslvae, SSLVAE, "sslvae/{}_{}".format(mode, dataset),
+    net, chckpt = instantiate_mod_chckpt(sslvae, SSLVAE,
+                                         "sslvae/{}_z{}_{}".format(mode, z_dim, dataset),
                                          is_ssl=True,
                                          dev=dev,
                                          max_epochs=max_epochs,
                                          **kwargs)
 
     if is_retrain:
-        net = add_vae(net, mode == "m1+m2", dataset, z_dim)
+        if mode == "m1+m2":
+            net = add_vae(net, dataset)
         net.fit(train, train.targets)
     else:
         net.initialize()
         net.load_params(checkpoint=chckpt)
-        net = add_vae(net, mode == "m1+m2", dataset, z_dim)
+        if mode == "m1+m2":
+            net = add_vae(net, mode == "m1+m2", dataset, z_dim)
 
     return net
 

@@ -1,0 +1,65 @@
+import torch.nn as nn
+
+from skssl.utils.initialization import linear_init
+from .mlp import MLP
+
+
+class AddFlatInput(nn.Module):
+    """Extend a module which takes takes a non flat input (e.g. images) such that it can
+    also take a flat input. The output of the given module will be concatenated with
+    the flat input and passed to a MLP.
+
+    Parameters
+    ----------
+    NonFlatModule: nn.Module
+        Module which takes in non flat inputs (e.g. images).
+
+    x_shape: array-like
+        Shape of a single non flat example.
+
+    flat_dim: int
+        Dimensionality of the flat inputs.
+
+    n_out: int
+        Size of ouput.
+
+    hidden_size: int, optional
+        Hidden size of the MLP which puts together the output of NonFlatModule and the
+        flat input. If -1 uses n_out.
+
+    n_hidden_layers: int, optional
+        Number of hidden layers of the MLP which puts together the output of NonFlatModule
+        and the flat input.
+
+    kwargs:
+        Additional arguments to NonFlatModule.
+    """
+
+    def __init__(self, NonFlatModule, x_shape, flat_dim, n_out,
+                 hidden_size=-1,
+                 n_hidden_layers=1,
+                 **kwargs):
+        super().__init__()
+        hidden_size = hidden_size if hidden_size != -1 else n_out
+        self.non_flat_module = NonFlatModule(x_shape, hidden_size, **kwargs)
+        self.mixer = MLP(hidden_size + flat_dim, n_out,
+                         hidden_size=hidden_size,
+                         n_hidden_layers=n_hidden_layers)
+
+    def forward(self, x, y):
+        non_flat_out = self.non_flat_module(x)
+        out = self.mixer(torch.cat((non_flat_out, y), dim=1))
+        return out
+
+    def reset_parameters(self):
+        weights_init(self)
+
+
+def add_flat_input(module, **kwargs):
+    """
+    Extend a module which accepts non flat inputs (e.g. images) to accept non
+    flat ones. Should be called by `add_flat_input(module)(x_shape, flat_dim, n_out, **kwargs)`
+    """
+    def added_flat_input(x_shape, flat_dim, n_out, **kwargs2):
+        return AddFlatInput(module, x_shape, flat_dim, n_out, **kwargs2, **kwargs)
+    return added_flat_input

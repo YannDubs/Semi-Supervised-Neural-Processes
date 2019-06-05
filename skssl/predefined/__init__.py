@@ -1,3 +1,3 @@
-from .cnn import SimpleCNN, ReversedSimpleCNN
-from .wideresnet import WideResNet, ReversedWideResNet
-from .mlp import MLP
+from .cnn import *
+from .wideresnet import *
+from .mlp import *

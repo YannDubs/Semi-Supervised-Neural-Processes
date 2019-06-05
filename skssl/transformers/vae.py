@@ -4,7 +4,11 @@ from torch.nn import functional as F
 
 from sklearn.base import TransformerMixin
 
+from skssl.predefined import WideResNet, ReversedSimpleCNN
 from skssl.utils.initialization import weights_init
+from skssl.utils.torchextend import l1_loss, huber_loss
+
+__all__ = ["VAELoss", "VAE"]
 
 
 # LOSS
@@ -14,8 +18,9 @@ class VAELoss(nn.Module):
 
     Parameters
     ----------
-    beta : float, optional
-        Weight of the kl divergence. If 1, corresponds to standard VAE.
+    get_beta : callable, optional
+        Function which returns the weight of the kl divergence given `is_training`
+        . Returning a constant 1 corresponds to standard VAE.
 
     distribution : {"bernoulli", "gaussian", "laplace"}, optional
         Distribution of the likelihood for each feature. See `reconstruction_loss`
@@ -27,24 +32,24 @@ class VAELoss(nn.Module):
         a constrained variational framework." (2016).
     """
 
-    def __init__(self, beta=1, distribution="laplace"):
+    def __init__(self, get_beta=lambda _: 1, distribution="laplace"):
         super().__init__()
-        self.beta = beta
+        self.get_beta = get_beta
         self.distribution = distribution
 
     def forward(self, inputs, y=None, X=None, weight=None):
-        """Compute the VAE loss.
+        """Compute the VAE loss averaged over the batch.
 
         Parameters
         ----------
         inputs : tuple
-            Tuple of (reconstruct, z_sample, z_suff_stat). This can directly take the output
-            of VAE.
+            Tuple of (reconstruct, z_sample, z_suff_stat, *). This can directly
+            take the output of VAE.
 
         y : None
             Placeholder.
 
-        X : torch.Tensor, size = [batch_size, *x_shape]
+        X : torch.Tensor or dict containing X, size = [batch_size, *x_shape]
             Training data corresponding to the targets.
 
         weight : torch.Tensor, size = [batch_size,]
@@ -55,7 +60,7 @@ class VAELoss(nn.Module):
         reconstruct, z_sample, z_suff_stat = inputs[:3]
         rec_loss = reconstruction_loss(X, reconstruct, distribution=self.distribution)
         kl_loss = kl_normal_loss(z_suff_stat)
-        loss = rec_loss + self.beta * kl_loss
+        loss = rec_loss + self.get_beta(self.training) * kl_loss
 
         if weight is not None:
             loss = loss * weight
@@ -63,7 +68,7 @@ class VAELoss(nn.Module):
         return loss.mean(dim=0)
 
 
-def reconstruction_loss(data, recon_data, distribution="bernoulli"):
+def reconstruction_loss(data, recon_data, distribution="laplace"):
     """
     Calculates the per image reconstruction loss for a batch of data. I.e. negative
     log likelihood.
@@ -88,18 +93,20 @@ def reconstruction_loss(data, recon_data, distribution="bernoulli"):
 
     Returns
     -------
-    loss : torch.Tensor
-        Per example cross entropy (i.e. normalized per batch but not per features)
+    loss : torch.Tensor, size = [batch_size,]
+        Loss for each example.
     """
     if distribution == "bernoulli":
-        loss = F.binary_cross_entropy(recon_data, data, reduction="sum")
+        loss = F.binary_cross_entropy(recon_data, data, reduction="none")
     elif distribution == "gaussian":
-        loss = F.mse_loss(recon_data, data, reduction="sum")
+        loss = F.mse_loss(recon_data, data, reduction="none")
     elif distribution == "laplace":
-        loss = F.l1_loss(recon_data, data, reduction="sum")
-        loss = loss * (loss != 0)  # masking to avoid nan
+        loss = l1_loss(recon_data, data, reduction="none")
     else:
         raise ValueError("Unkown distribution: {}".format(distribution))
+
+    batch_size = recon_data.size(0)
+    loss = loss.view(batch_size, -1).sum(dim=1)
 
     return loss
 
@@ -107,7 +114,8 @@ def reconstruction_loss(data, recon_data, distribution="bernoulli"):
 def kl_normal_loss(z_suff_stat):
     """
     Calculates the KL divergence between a normal distribution
-    with diagonal covariance and a unit normal distribution.
+    with diagonal covariance and a unit normal distribution for each example
+    in a batch.
 
     Parameters
     ----------
@@ -115,7 +123,6 @@ def kl_normal_loss(z_suff_stat):
         Mean and diagonal log variance of the normal distribution.
     """
     mean, logvar = z_suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
-    # batch mean of kl for each latent dimension
     kl = 0.5 * (-1 - logvar + mean.pow(2) + logvar.exp()).sum(dim=1)
     return kl
 
@@ -129,12 +136,12 @@ class VAE(nn.Module, TransformerMixin):
     Parameters
     ----------
     Encoder : nn.Module
-        Encoder module which maps x -> z. It should be callable with
+        Encoder module which maps x -> z_suff_stat. It should be callable with
         `encoder(x_shape, n_out)`.
 
     Decoder : nn.Module
         Decoder module which maps z -> x. It should be callable with
-        `decoder(x_shape, z_dim)`. No non linearities should be applied to the
+        `decoder(z_dim, x_shape)`. No non linearities should be applied to the
         output.
 
     x_shape : tuple of ints
@@ -144,12 +151,15 @@ class VAE(nn.Module, TransformerMixin):
         Number of latent dimensions.
     """
 
-    def __init__(self, Encoder, Decoder, x_shape, z_dim=10):
+    def __init__(self, x_shape,
+                 Encoder=WideResNet,
+                 Decoder=ReversedSimpleCNN,
+                 z_dim=10):
         super().__init__()
-        self.encoder = Encoder(x_shape, z_dim * 2)
-        self.decoder = Decoder(x_shape, z_dim)
-        self.z_dim = z_dim
         self.x_shape = x_shape
+        self.encoder = Encoder(x_shape, z_dim * 2)
+        self.decoder = Decoder(z_dim, x_shape)
+        self.z_dim = z_dim
 
         self.reset_parameters()
 
@@ -162,11 +172,22 @@ class VAE(nn.Module, TransformerMixin):
 
         Parameters
         ----------
-        X : torch.Tensor, size = [*x_shape]
+        X : torch.Tensor, size = [batch_size, *x_shape]
             Batch of data.
 
-        y : torch.Tensor, size = [batch_size, y_dim]
-            One hot encoded labels.
+        y : torch.Tensor, size = [batch_size]
+            Labels. -1 for unlabelled. `None` if all unlabelled.
+
+        Returns
+        ------
+        reconstruct: torch.Tensor, size = [batch_size, *x_shape]
+            Reconstructed image. Values between 0,1 (i.e. after logistic).
+
+        z_sample: torch.Tensor, size = [batch_size, z_dim]
+            Latent sample.
+
+        z_suff_stat: torch.Tensor, size = [batch_size, z_dim*2]
+            Sufficient statistics of the latent sample {mu; logvar}.
         """
         z_suff_stat = self.encoder(X)
         z_sample = self.reparameterize(z_suff_stat)

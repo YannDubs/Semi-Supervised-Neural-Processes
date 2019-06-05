@@ -1,1 +1,1 @@
-from .selftraining import SelfTrainingMeta
+from .selftraining import *

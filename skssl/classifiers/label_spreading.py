@@ -2,6 +2,7 @@ from sklearn.semi_supervised import label_propagation
 
 from skopt.space import Real, Categorical, Integer
 
+__all__ = ["LabelSpreading"]
 
 class LabelSpreading(label_propagation.LabelSpreading):
     __doc__ = """
