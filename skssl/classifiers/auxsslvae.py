@@ -5,6 +5,7 @@ Maaløe, Lars, et al. "Auxiliary deep generative models."
 arXiv preprint arXiv:1602.05473 (2016).
 """
 import torch
+import torch.nn as nn
 
 from skssl.predefined import MLP, WideResNet, ReversedSimpleCNN
 from skssl.predefined.helpers import add_flat_input
@@ -16,7 +17,7 @@ from .sslvae import SSLVAELoss, SSLVAE
 
 class SSLAuxVAELoss(SSLVAELoss):
     """
-    Compute the SSL VAE loss as in [1].
+    Compute the SSL VAE with Auxilary variable loss as in [1].
 
     Parameters
     ----------
@@ -24,29 +25,24 @@ class SSLAuxVAELoss(SSLVAELoss):
         Weight of the kl divergence. If 1, corresponds to standard VAE. By default
         linear annealing from 0 to 1 in 200 steps.
 
-    distribution : {"bernoulli", "gaussian", "laplace"}, optional
-        Distribution of the likelihood for each feature. See `reconstruction_loss`
-        for more details.
-
     kwargs:
-        Additional arguments to `VAELoss.
+        Additional arguments to `SSLVAELoss`.
 
     References
     ----------
-        [1] Kingma, Durk P., et al. "Semi-supervised learning with deep generative
-        models." Advances in neural information processing systems. 2014.
+        [1] Maaløe, Lars, et al. "Auxiliary deep generative models."
+        arXiv preprint arXiv:1602.05473 (2016).
     """
 
     def __init__(self, beta=HyperparameterInterpolator(0, 1, 200), **kwargs):
         super().__init__(beta=beta, **kwargs)
-        self.criterion_y = nn.CrossEntropyLoss(ignore_index=-1, reduction="mean")
 
     def forward(self, inputs, y=None, X=None):
-        """Compute the SSL VAE loss.
+        """Compute the loss.
 
         Note
         ----
-        - DOesn't compute the loss due to p(y) because doesn't depend on param
+        - Doesn't compute the loss due to p(y) because doesn't depend on param
 
         Parameters
         ----------
@@ -161,86 +157,34 @@ class SSLAuxVAE(SSLVAE):
                  AuxDecoder=add_flat_input(WideResNet),
                  Classifier=add_flat_input(WideResNet)):
 
-        super().__init__()
-        self.x_shape = x_shape
-        self.y_dim = y_dim
-        self.z_dim = z_dim
-        self.a_dim = a_dim
+        empty = lambda *args: None
+        super().__init__(x_shape, y_dim, z_dim=z_dim, Encoder=empty, Decoder=empty,
+                         Classifier=empty)
 
-        self.aux_encoder = AuxEncoder(x_shape, a_dim * 2)
-        self.encoder = Encoder(x_shape, a_dim + y_dim, z_dim)
-        self.decoder = Decoder(z_dim + y_dim, x_shape)
-        self.aux_decoder = AuxDecoder(z_dim + y_dim, x_shape)
-        self.classifier = Classifier(x_shape, a_dim, y_dim)
+        self.a_dim = a_dim
+        self.aux_encoder = AuxEncoder(self.x_shape, self.a_dim * 2)
+        self.encoder = Encoder(self.x_shape, self.a_dim + self.y_dim, self.z_dim)
+        self.decoder = Decoder(self.z_dim + self.y_dim, self.x_shape)
+        self.aux_decoder = AuxDecoder(self.z_dim + self.y_dim, self.x_shape)
+        self.classifier = Classifier(self.x_shape, self.a_dim, self.y_dim)
 
         self.reset_parameters()
 
-    def reset_parameters(self):
-        weights_init(self)
+    def classify(self, X, q_a_sample=None, **kwargs):
+        """Classify the given X by returning multinomial logits."""
+        # q(y|a,x)
+        pred_logits = self.classifier(X, q_a_sample)
+        return pred_logits
 
-    def forward(self, X, y=None):
-        """
-        Forward pass of model.
-
-        Parameters
-        ----------
-        X : torch.Tensor, size = [batch_size, *x_shape]
-            Batch of data.
-
-        y : torch.Tensor, size = [batch_size]
-            Labels. -1 for unlabelled. `None` if all unlabelled.
-
-        Returns
-        ------
-        y_hat: torch.Tensor, size = [batch_size, y_dim]
-            Multinomial logits (i.e. no softmax).
-
-        z_sample: torch.Tensor, size = [batch_size, z_dim]
-            Latent sample.
-
-        reconstruct: torch.Tensor, size = [batch_size, *x_shape]
-            Reconstructed image. Values between 0,1 (i.e. after logistic).
-
-        z_suff_stat: torch.Tensor, size = [batch_size, z_dim*2]
-            Sufficient statistics of the latent sample {mu; logvar}.
-        """
-        if y is None:
-            y = torch.tensor([-1], device=X.device).expand(X.size(0))
-
-        X_lab, X_unlab = split_labelled_unlabelled(X, y)
-        y_lab, y_unlab = split_labelled_unlabelled(y, y)
-
+    def _get_additional_outputs(self, X):
+        """Function that can be overriden to add outputs to the forward method of SSLVAE."""
         # q(a|x)
         q_a_suff_stat = self.aux_decoder(X)
         q_a_sample = self.reparameterize(q_a_suff_stat)
+        return {"q_a_sample": q_a_sample, "q_a_suff_stat": q_a_suff_stat}
 
-        # q(y|a,x)
-        y_hat = self.classifier(X, q_a_sample)
-
-        # initialize as empty for concatenation
-        empty = torch.tensor([], dtype=y_hat.dtype, device=y_hat.device)
-        rec_lab = z_suff_stat_lab = z_sample_lab = empty
-        rec_unlab = z_suff_stat_unlab = z_sample_unlab = empty
-
-        if (y != -1).sum() != 0:
-            y_lab_onehot = torch.zeros_like(y_hat[:y_lab.size(0), ...]
-                                            ).scatter_(1, y_lab.view(-1, 1), 1)
-            rec_lab, z_sample_lab, z_suff_stat_lab, = self._forward_labelled(X_lab, y_lab_onehot)
-
-        if (y == -1).sum() != 0:
-            # no copying
-            y_unlab_onehot = torch.zeros_like(y_hat[:1, ...]).expand(y_unlab.size(0), self.y_dim)
-            rec_unlab, z_sample_unlab, z_suff_stat_unlab, = self._forward_unlabelled(X_unlab, y_unlab_onehot)
-
-        reconstruct = torch.cat((rec_lab, rec_unlab), dim=0)
-        z_sample = torch.cat((z_suff_stat_lab, z_suff_stat_unlab), dim=0)
-        z_suff_stat = torch.cat((z_suff_stat_lab, z_suff_stat_unlab), dim=0)
-
-        # inverts z_suff_stat, reconstruct because second output (z_sample) is
-        # used for .transform while first output (y_hat) is used for .predict
-        return y_hat, z_sample, reconstruct, z_suff_stat
-
-    def _forward_labelled(self, X, q_a_sample, y_onehot):
+    def _forward_labelled(self, X, y_onehot, q_a_sample=None, **kwargs):
+        """Forward fucntion for labbeled examples."""
         # q(z|a,y,x)
         ay = torch.cat([q_a_sample, y_onehot], dim=1)
         z_suff_stat = self.encoder(X, ay)
@@ -252,41 +196,3 @@ class SSLAuxVAE(SSLVAE):
         p_a_suff_stat = self.aux_decoder(X, zy)
         p_a_sample = self.reparameterize(p_a_suff_stat)
         return reconstruct, z_sample, z_suff_stat, p_a_sample, p_a_suff_stat
-
-    def _forward_unlabelled(self, X, y_onehot):
-        """Same as for labelled but marginalizes out labels => compute outputs for all y"""
-        reconstruct_list, z_sample_list, z_suff_stat_list = [], [], []
-
-        # expectation over all possible labels
-        for l in range(self.y_dim):
-            y_onehot.zero_()
-            y_onehot[:, l] = 1
-
-            reconstruct, z_sample, z_suff_stat = self._forward_labelled(X, y_onehot)
-            reconstruct_list.append(reconstruct)
-            z_suff_stat_list.append(z_suff_stat)
-            z_sample_list.append(z_sample)
-
-        reconstruct = torch.cat(reconstruct_list, dim=0)
-        z_suff_stat = torch.cat(z_suff_stat_list, dim=0)
-        z_sample = torch.cat(z_sample_list, dim=0)
-
-        return reconstruct, z_sample, z_suff_stat
-
-    def sample_decode(self, z, y):
-        """
-        Returns a sample from the decoder.
-
-        Parameters
-        ----------
-        z : torch.Tensor, size = [batch_size, z_dim]
-            Latent variable.
-
-        y : torch.Tensor, size = [batch_size]
-            Labels.
-        """
-        batch_size = z.size(0)
-        y_onehot = torch.zeros(batch_size, self.y_dim, device=z.device).float()
-        y_onehot.scatter_(1, y.view(-1, 1), 1)
-        sample = torch.sigmoid(self.decoder(torch.cat((z, y_onehot), dim=1)))
-        return sample

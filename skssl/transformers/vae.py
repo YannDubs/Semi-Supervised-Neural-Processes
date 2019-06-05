@@ -1,12 +1,12 @@
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 
 from sklearn.base import TransformerMixin
 
 from skssl.predefined import WideResNet, ReversedSimpleCNN
 from skssl.utils.initialization import weights_init
-from skssl.utils.torchextend import l1_loss, huber_loss
+from skssl.utils.torchextend import (l1_loss, huber_loss, reconstruction_loss,
+                                     kl_normal_loss, reparameterize)
 
 __all__ = ["VAELoss", "VAE"]
 
@@ -67,68 +67,10 @@ class VAELoss(nn.Module):
 
         return loss.mean(dim=0)
 
-
-def reconstruction_loss(data, recon_data, distribution="laplace"):
-    """
-    Calculates the per image reconstruction loss for a batch of data. I.e. negative
-    log likelihood.
-
-    Parameters
-    ----------
-    data : torch.Tensor, size = [batch_size, *]
-        Input data (e.g. batch of images).
-
-    recon_data : torch.Tensor, size = [batch_size, *]
-        Reconstructed data.
-
-    distribution : {"bernoulli", "gaussian", "laplace"}, optional
-        Distribution of the likelihood for each feature. Implicitely defines the
-        loss. Bernoulli corresponds to a binary cross entropy (bse) loss and is the
-        most commonly used for features in [0,1] (e.g. normalized images). It has
-        the issue that it doesn't penalize the same way (0.1,0.2) and (0.4,0.5),
-        which might not be optimal. Gaussian distribution corresponds to MSE,
-        and is sometimes used, but hard to train because it ends up focusing only
-        a few features that are very wrong. Laplace distribution corresponds to
-        L1 solves partially the issue of MSE.
-
-    Returns
-    -------
-    loss : torch.Tensor, size = [batch_size,]
-        Loss for each example.
-    """
-    if distribution == "bernoulli":
-        loss = F.binary_cross_entropy(recon_data, data, reduction="none")
-    elif distribution == "gaussian":
-        loss = F.mse_loss(recon_data, data, reduction="none")
-    elif distribution == "laplace":
-        loss = l1_loss(recon_data, data, reduction="none")
-    else:
-        raise ValueError("Unkown distribution: {}".format(distribution))
-
-    batch_size = recon_data.size(0)
-    loss = loss.view(batch_size, -1).sum(dim=1)
-
-    return loss
-
-
-def kl_normal_loss(z_suff_stat):
-    """
-    Calculates the KL divergence between a normal distribution
-    with diagonal covariance and a unit normal distribution for each example
-    in a batch.
-
-    Parameters
-    ----------
-    z_suff_stat : torch.Tensor, size = [batch_size, 2*latent_dim]
-        Mean and diagonal log variance of the normal distribution.
-    """
-    mean, logvar = z_suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
-    kl = 0.5 * (-1 - logvar + mean.pow(2) + logvar.exp()).sum(dim=1)
-    return kl
-
-
 # MODEL
-class VAE(nn.Module, TransformerMixin):
+
+
+class VAE(nn.Module):
     """Unsupervised VAE. This is a transformer as it is primarily
     used for representation learning, so the mean latent is the output of `predict`
     but `sample_decode` can still be used for generation.
@@ -154,7 +96,7 @@ class VAE(nn.Module, TransformerMixin):
     def __init__(self, x_shape,
                  Encoder=WideResNet,
                  Decoder=ReversedSimpleCNN,
-                 z_dim=10):
+                 z_dim=64):
         super().__init__()
         self.x_shape = x_shape
         self.encoder = Encoder(x_shape, z_dim * 2)
@@ -190,27 +132,9 @@ class VAE(nn.Module, TransformerMixin):
             Sufficient statistics of the latent sample {mu; logvar}.
         """
         z_suff_stat = self.encoder(X)
-        z_sample = self.reparameterize(z_suff_stat)
+        z_sample = reparameterize(z_suff_stat, is_sample=self.training)
         reconstruct = torch.sigmoid(self.decoder(z_sample))
         return reconstruct, z_sample, z_suff_stat
-
-    def reparameterize(self, z_suff_stat):
-        """
-        Samples from a normal distribution using the reparameterization trick.
-
-        Parameters
-        ----------
-        z_suff_stat : torch.Tensor, size = [batch_size, 2*latent_dim]
-            Mean and diagonal log variance of the normal distribution.
-        """
-        mean, logvar = z_suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
-        if self.training:
-            std = torch.exp(0.5 * logvar)
-            eps = torch.randn_like(std)
-            return mean + std * eps
-        else:
-            # Reconstruction mode
-            return mean
 
     def sample_decode(self, z):
         """

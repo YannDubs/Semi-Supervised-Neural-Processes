@@ -69,20 +69,25 @@ def make_ssl_input(dataset, y=None):
         return ({'X': dataset, "y": y}, y)
 
 
-def split_labelled_unlabelled(to_split, y, is_stacked=False):
+def split_labelled_unlabelled(to_split, y, is_ordered=False):
     """
     Split an array like, or a list / tuple / dictionary of arrays like in a
-    labelled and unlabbeled part. If `is_stacked` then first array on dim=1 is
-    labeleld and the rest unlabelled.
+    labelled and unlabbeled part. If `is_ordered` then first `(y!=-1).sum()` on
+    dim=0 are labeleld and the rest unlabelled.
     """
     if isinstance(to_split, dict):
-        lab_unlab = {k: split_labelled_unlabelled(v, y, is_stacked=is_stacked)
+        lab_unlab = {k: split_labelled_unlabelled(v, y, is_ordered=is_ordered)
                      for k, v in to_split.items()}
+        if len(lab_unlab) == 0:
+            return {}, {}
     elif isinstance(to_split, list) or isinstance(to_split, tuple):
-        lab_unlab = [split_labelled_unlabelled(i, y, is_stacked=is_stacked) for i in to_split]
+        lab_unlab = [split_labelled_unlabelled(i, y, is_ordered=is_ordered) for i in to_split]
+        if len(lab_unlab) == 0:
+            return [], []
     else:
         if is_stacked:
-            return to_split[:, 0, ...], to_split[:, 1:, ...]
+            n_lab = (y != -1).sum()
+            return to_split[:n_lab, ...], to_split[n_lab:, ...]
         else:
             return to_split[y != -1], to_split[y == -1]
 
