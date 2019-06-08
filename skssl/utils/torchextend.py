@@ -155,26 +155,8 @@ def reparameterize(mean_logvar, is_sample=True):
         Whetehr to return a sample from the gaussian. If `False` returns the mean.
     """
     mean, logvar = mean_logvar.view(mean_logvar.shape[0], -1, 2).unbind(-1)
-    std = torch.exp(0.5 * logvar)
-    return reparameterize_meanstd(mean, std, is_sample=is_sample)
-
-
-def reparameterize_meanstd(mean, std, is_sample=True):
-    """
-    Samples from a normal distribution using the reparameterization trick.
-
-    Parameters
-    ----------
-    mean: torch.Tensor, size = [batch_size, latent_dim]
-        Mean of the normal distribution
-
-    std: torch.Tensor, size = [batch_size, latent_dim]
-        Standard deviation of the normal distribution.
-
-    is_sample: bool, optional
-        Whetehr to return a sample from the gaussian. If `False` returns the mean.
-    """
     if is_sample:
+        std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mean + std * eps
     else:

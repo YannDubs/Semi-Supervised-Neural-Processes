@@ -141,21 +141,15 @@ class NeuralProcess(nn.Module):
         r: torch.Tensor, size=[batch_size, r_dim]
             Representation.
 
-        mean_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
-            Mean predicted target.
-
-        std_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
-            Standard deviation predicted target.
+        trgt_dist: torch.distributions.Distribution
+            Target distribution.
 
         Y_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
             Set of all target values {y_t}, returned to redirect it to the loss
             function.
 
-        mean_z: torch.Tensor, size=[batch_size, r_dim]
-            Mean latent.
-
-        std_z: torch.Tensor, size=[batch_size, r_dim]
-            Standard deviation of latent.
+        z_dist: torch.distributions.Distribution
+            Latent distribution. `None` if `LatentEncoder=None`.
         """
         batch_size, n_cntxt, _ = X_cntxt.shape()
         n_trgt = X_trgt.size(1)
@@ -164,7 +158,7 @@ class NeuralProcess(nn.Module):
         R_cntxt = self.encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
         # batch_size, r_dim
         r = self.aggregator(R_cntxt, dim=1)
-        z_sample, mean_z, std_z = self.encode_latent(r)
+        z_sample, z_dist = self.encode_latent(r)
         # batch_size, n_trgt, r_dim (repeat no copy)
         z_expanded = z_sample.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
         # batch_size, n_trgt, y_dim*2
@@ -173,9 +167,10 @@ class NeuralProcess(nn.Module):
         # Following convention "Empirical Evaluation of Neural Process Objectives"
         # and "Attentive Neural Processes"
         std_trgt = 0.1 + 0.9 * F.softplus(std_trgt)
+        trgt_dist = MultivariateNormalDiag(mean_trgt, std_trgt)
 
         # for transform you want r (could also want mu_z but r should have this info)
-        return r, mean_trgt, std_trgt, Y_trgt, mean_z, std_z
+        return r, trgt_dist, Y_trgt, z_dist
 
     def reset_parameters(self):
         weights_init(self)
@@ -186,15 +181,15 @@ class NeuralProcess(nn.Module):
             z_suff_stat = self.lat_encoder(X)
             # Define sigma following convention in "Empirical Evaluation of Neural
             # Process Objectives". SO doesn't use usual logvar
-            #mean_z, std_z = suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
-            #std = 0.1 + 0.9 * torch.sigmoid(std)
-            #z_sample = reparameterize_meanstd(mean, std, is_sample=self.training)
+            mean_z, std_z = suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
+            std_z = 0.1 + 0.9 * torch.sigmoid(std_z)
+            z_dist = MultivariateNormalDiag(mean_z, std_z)
+            z_sample = z_dist.rsample()
         else:
             z_sample = r
-            mean_z = None
-            std_z = None
+            z_dist = None
 
-        return z_sample, mean_z, std_z
+        return z_sample, z_dist
 
 
 class SpatialNeuralProcess(nn.Module):
