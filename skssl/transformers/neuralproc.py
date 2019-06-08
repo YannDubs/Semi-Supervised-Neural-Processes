@@ -6,6 +6,7 @@ import random
 from skssl.predefined import MLP
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
 from skssl.utils.helpers import prod, ratio_to_int
+from skssl.training.masks import random_masker, no_masker
 
 
 __all__ = ["NeuralProcessLoss", "SpatialNeuralProcess"]
@@ -52,7 +53,8 @@ class NeuralProcessLoss(nn.Module):
 
 class NeuralProcess(nn.Module):
     """
-    Implements Neural Process for functions of arbitrary dimensions.
+    Implements (Conditional [2]) Neural Process [1] using tricks from [3] for
+    functions of arbitrary  dimensions.
 
     Parameters
     ----------
@@ -62,28 +64,42 @@ class NeuralProcess(nn.Module):
     y_dim : int
         Dimension of y values.
 
-    r_dim : int
+    r_dim : int, optional
         Dimension of representation.
 
-    Encoder: nn.Module
-        Encoder module which maps {[x_i,y_i]} -> {r_i}. It should be constructed
+    Encoder: nn.Module, optional
+        Encoder module which maps {[x_i;y_i]} -> {r_i}. It should be constructed
         via `encoder(n_in, n_out)`.
 
-    Decoder: nn.Module
-        Decoder module which maps {r, x_t} -> {y_hat_t}. It should be constructed via
+    Decoder: nn.Module, optional
+        Decoder module which maps {[r;x_t]} -> {y_hat_t}. It should be constructed via
         `decoder(n_in, n_out)`.
 
-    aggregator: callable
+    aggregator: callable, optional
         Agregreator function which maps {r_i} -> r. It should have a an argument
         `dim` to say specify the dimensions of aggregation. The dimension should
         not be kept (i.e. keepdim=False).
+
+    LatentEncoder: nn.Module, optional
+        Encoder which maps r -> z_suff_stat. It should be constructed via
+        `LatentEncoder(r_dim, n_out)`. If not given, the model will be a Conditional
+        Neural Process [2] (no latents).
+
+    References
+    ----------
+    [1] Garnelo, Marta, et al. "Neural processes." arXiv preprint arXiv:1807.01622 (2018).
+    [2] Garnelo, Marta, et al. "Conditional neural processes." arXiv preprint
+        arXiv:1807.01613 (2018).
+    [3] Le, Tuan Anh, et al. "Empirical Evaluation of Neural Process Objectives."
+        NeurIPS workshop on Bayesian Deep Learning. 2018.
     """
 
     def __init__(self, x_dim, y_dim,
                  Encoder=lambda *args: MLP(*args, hidden_size=128, n_hidden_layers=3),
                  Decoder=lambda *args: MLP(*args, hidden_size=128, n_hidden_layers=3),
                  r_dim=128,
-                 aggregator=torch.mean):
+                 aggregator=torch.mean,
+                 LatentEncoder=None):
         super().__init__()
         self.x_dim = x_dim
         self.y_dim = y_dim
@@ -92,6 +108,11 @@ class NeuralProcess(nn.Module):
         self.encoder = Encoder(x_dim + y_dim, r_dim)
         self.aggregator = aggregator
         self.decoder = Decoder(r_dim + x_dim, y_dim * 2)  # *2 because mean and var
+
+        if LatentEncoder is not None:
+            self.lat_encoder = LatentEncoder(r_dim, r_dim * 2)
+        else:
+            self.lat_encoder = None
 
         self.reset_parameters()
 
@@ -112,94 +133,68 @@ class NeuralProcess(nn.Module):
         X_trgt: torch.Tensor, size=[batch_size, n_trgt, x_dim]
             Set of all target features {x_t}.
 
-        Y_cntxt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
-            Set of all target values {y_t}. Required during training.
+        Y_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim], optional
+            Set of all target values {y_t}. Only required during training.
 
         Return
         ------
-        mu_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
+        r: torch.Tensor, size=[batch_size, r_dim]
+            Representation.
+
+        mean_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
             Mean predicted target.
 
         std_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
             Standard deviation predicted target.
+
+        Y_trgt: torch.Tensor, size=[batch_size, n_trgt, y_dim]
+            Set of all target values {y_t}, returned to redirect it to the loss
+            function.
+
+        mean_z: torch.Tensor, size=[batch_size, r_dim]
+            Mean latent.
+
+        std_z: torch.Tensor, size=[batch_size, r_dim]
+            Standard deviation of latent.
         """
         batch_size, n_cntxt, _ = X_cntxt.shape()
         n_trgt = X_trgt.size(1)
 
         # batch_size, n_cntxt, r_dim
-        R_cntxt = self.encoder(torch.cat((X_cntxt, Y_cntxt), dim=2))
+        R_cntxt = self.encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
         # batch_size, r_dim
         r = self.aggregator(R_cntxt, dim=1)
-        # batch_size, n_trgt, r_dim (repeat no cupy)
-        r = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
+        z_sample, mean_z, std_z = self.encode_latent(r)
+        # batch_size, n_trgt, r_dim (repeat no copy)
+        z_expanded = z_sample.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
         # batch_size, n_trgt, y_dim*2
-        suff_stat_Y_hat_trgt = self.decoder(torch.cat((r, X_trgt), dim=-1))
-
-        mu_trgt, std_trgt = suff_stat_Y_hat_trgt.split(self.y_dim, dim=-1)
+        suff_stat_Y_hat_trgt = self.decoder(torch.cat((z_expanded, X_trgt), dim=-1))
+        mean_trgt, std_trgt = suff_stat_Y_hat_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
         # and "Attentive Neural Processes"
         std_trgt = 0.1 + 0.9 * F.softplus(std_trgt)
 
-        # for prediction you want mean tgt, for transform you want r
-        # reirects Y_trgt to be used in the loss function
-        return mu_trgt, r, MultivariateNormalDiag(mu_trgt, std_trgt), Y_trgt
+        # for transform you want r (could also want mu_z but r should have this info)
+        return r, mean_trgt, std_trgt, Y_trgt, mean_z, std_z
 
     def reset_parameters(self):
         weights_init(self)
 
+    def encode_latent(self, r):
+        """Converts the representation to a latent distribution and sample from it."""
+        if self.lat_encoder is not None:
+            z_suff_stat = self.lat_encoder(X)
+            # Define sigma following convention in "Empirical Evaluation of Neural
+            # Process Objectives". SO doesn't use usual logvar
+            #mean_z, std_z = suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
+            #std = 0.1 + 0.9 * torch.sigmoid(std)
+            #z_sample = reparameterize_meanstd(mean, std, is_sample=self.training)
+        else:
+            z_sample = r
+            mean_z = None
+            std_z = None
 
-def random_masker(batch_size, mask_shape,
-                  min_nnz=.1,
-                  max_nnz=.5,
-                  is_batch_repeat=False):
-    """
-    Return a random context mask. The number of non zero values will be in
-    [min_nnz, max_nnz]. If min_perc, max_perc are smaller than 1 these represent
-    a percentage of points. If `is_batch_repeat` use the same mask for all elements
-    in the batch.
-    """
-    n_possible_points = prod(mask_shape)
-    min_nnz = ratio_to_int(min_nnz, n_possible_points)
-    max_nnz = ratio_to_int(max_nnz, n_possible_points)
-    n_nnz = random.randint(min_nnz, max_nnz)
-
-    if is_batch_repeat:
-        mask = torch.zeros(n_possible_points).byte()
-        mask[torch.randperm(n_possible_points)[:n_nnz]] = 1
-        mask = mask.view(*mask_shape).contiguous()
-        mask = mask.unsqueeze(0).expand(batch_size, *mask_shape)
-    else:
-        mask = np.zeros((batch_size, n_possible_points), dtype=np.uint8)
-        mask[:, :n_nnz] = 1
-        indep_shuffle(mask, -1)
-        mask = torch.from_numpy(mask)
-        mask = mask.view(batch_size, *mask_shape).contiguous()
-
-    return mask
-
-
-def masker_composes(maskers):
-    """Return a masker composed of a list of maskers."""
-    def masker_coposed(batch_size, mask_shape):
-        mask = no_masker(batch_size, mask_shape)
-        for masker in maskers:
-            mask *= masker(batch_size, mask_shape)
-    return mask
-
-
-def half_masker(batch_size, mask_shape, dim=0):
-    """Return a mask which masks the top half features of `dim`."""
-    mask = torch.zeros((batch_size, *mask_shape)).byte()
-    slcs = [slice(None)] * (len(mask_shape))
-    slcs[dim] = slice(0, mask_shape[dim] // 2)
-    mask[[slice(None)] + slcs] = 1
-    return mask
-
-
-def no_masker(batch_size, mask_shape):
-    """Return a mask of all 1."""
-    mask = torch.ones((batch_size, *mask_shape)).byte()
-    return mask
+        return z_sample, mean_z, std_z
 
 
 class SpatialNeuralProcess(nn.Module):
@@ -209,15 +204,15 @@ class SpatialNeuralProcess(nn.Module):
     Parameters
     ----------
     x_shape: tuple of ints
-        The first dimension represents the output, the rest are the spatial
-        dimensions. E.g. (3, 32, 32) for images would mean output is dimensional
-        (channels) while features are on a 2d grid.
+        The first dimension represents the number of outputs, the rest are the
+        spatial dimensions. E.g. (3, 32, 32) for images would mean output is 3
+        dimensional (channels) while features are on a 2d grid.
 
     context_masker: callable, optional
-        Return the context masks if not given during the forward call.
+        Get the context masks if not given during the forward call.
 
     context_masker: callable, optional
-        Return the context masks if not given during the forward call.
+        Get the context masks if not given during the forward call.
 
     kwargs:
         Additional arguments to `NeuralProcess`.
@@ -276,14 +271,16 @@ class SpatialNeuralProcess(nn.Module):
         batch_size, *spatial_shape = mask.shape
 
         # batch_size, self.spatial_dim
-        nonzero_idx = mask.nonzero()
-        # assume same amount of nonzero acros batch
+        nonzero_idcs = mask.nonzero()
+        # assume same amount of nonzero across batch
         n_cntxt = mask[0].nonzero().size(0)
 
-        # don't take Y because same for all
-        X_masked = nonzero_idx[:, 1:].view(batch_size, n_cntxt, self.spatial_dim).float()
-        # normalize to [-1,1] every dimension
-        X_masked = min_max_scale(X_masked, min_val=-1, max_val=1, dim=0)
+        # first dim is batch idx.
+        X_masked = nonzero_idcs[:, 1:].view(batch_size, n_cntxt, self.spatial_dim).float()
+        # normalize spatial idcs to [-1,1]
+        for i, size in enumerate(spatial_shape):
+            X_masked[:, :, i] *= 2 / (size - 1)  # in [0,2]
+            X_masked[:, :, i] -= 1  # in [-1,1]
 
         mask = mask.unsqueeze(1).expand(batch_size, self.y_dim, *spatial_shape)
         Y_masked = X[mask].view(batch_size, self.y_dim, n_cntxt)

@@ -111,37 +111,70 @@ def reconstruction_loss(data, recon_data, distribution="laplace"):
     return loss
 
 
-def kl_normal_loss(z_suff_stat):
+# TO-DO: use pytorch distributions
+def kl_normal_loss(p_suff_stat, q_suff_stat=None):
     """
-    Calculates the KL divergence between a normal distribution
-    with diagonal covariance and a unit normal distribution for each example
-    in a batch.
+    Calculates the KL divergence between 2 normal distribution with with diagonal
+    covariance for each example in a batch. `KL[P||Q].
 
     Parameters
     ----------
-    z_suff_stat : torch.Tensor, size = [batch_size, 2*latent_dim]
-        Mean and diagonal log variance of the normal distribution.
+    p_suff_stat: torch.Tensor, size = [batch_size, 2*latent_dim]
+        Mean and diagonal log variance of the first normal distribution.
+
+    q_suff_stat: torch.Tensor, size = [batch_size, 2*latent_dim]
+        Mean and diagonal log variance of the second normal distribution. If
+        None, assumes standard normal gaussian.
     """
-    mean, logvar = z_suff_stat.view(z_suff_stat.shape[0], -1, 2).unbind(-1)
-    kl = 0.5 * (-1 - logvar + mean.pow(2) + logvar.exp()).sum(dim=1)
+    p_mean, p_logvar = p_suff_stat.view(p_suff_stat.shape[0], -1, 2).unbind(-1)
+
+    if q_suff_stat is None:
+        q_mean = torch.zeros_like(p_mean)
+        q_logvar = torch.zeros_like(p_logvar)
+    else:
+        q_mean, q_logvar = q_suff_stat.view(q_suff_stat.shape[0], -1, 2).unbind(-1)
+
+    logvar_ratio = p_logvar - q_logvar
+
+    t1 = (p_mean - q_mean).pow(2) / q_logvar.exp()
+
+    kl = 0.5 * (t1 + logvar_ratio.exp() - 1 - logvar_ratio).sum(dim=-1)
     return kl
 
 
-def reparameterize(suff_stat, is_sample=True):
+def reparameterize(mean_logvar, is_sample=True):
     """
     Samples from a normal distribution using the reparameterization trick.
 
     Parameters
     ----------
-    suff_stat: torch.Tensor, size = [batch_size, 2*latent_dim]
+    mean_logvar: torch.Tensor, size = [batch_size, 2*latent_dim]
         Mean and diagonal log variance of the normal distribution.
 
     is_sample: bool, optional
         Whetehr to return a sample from the gaussian. If `False` returns the mean.
     """
-    mean, logvar = suff_stat.view(suff_stat.shape[0], -1, 2).unbind(-1)
+    mean, logvar = mean_logvar.view(mean_logvar.shape[0], -1, 2).unbind(-1)
+    std = torch.exp(0.5 * logvar)
+    return reparameterize_meanstd(mean, std, is_sample=is_sample)
+
+
+def reparameterize_meanstd(mean, std, is_sample=True):
+    """
+    Samples from a normal distribution using the reparameterization trick.
+
+    Parameters
+    ----------
+    mean: torch.Tensor, size = [batch_size, latent_dim]
+        Mean of the normal distribution
+
+    std: torch.Tensor, size = [batch_size, latent_dim]
+        Standard deviation of the normal distribution.
+
+    is_sample: bool, optional
+        Whetehr to return a sample from the gaussian. If `False` returns the mean.
+    """
     if is_sample:
-        std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mean + std * eps
     else:

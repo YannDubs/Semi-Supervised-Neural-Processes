@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from sklearn.base import ClassifierMixin, TransformerMixin
 
 from skssl.transformers import VAELoss
-from skssl.predefined import MLP, WideResNet, ReversedSimpleCNN
+from skssl.predefined import MLP, WideResNet, ReversedWideResNet
 from skssl.predefined.helpers import add_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import reparameterize
@@ -46,6 +46,12 @@ class SSLVAELoss(VAELoss):
         self.alpha = alpha
         self.criterion_y = nn.CrossEntropyLoss(ignore_index=-1, reduction="mean")
 
+    def _split_inputs(self, inputs):
+        """Split the inputs."""
+        pred_logits, vae_inputs_lab, vae_inputs_unlab = inputs[0], inputs[1:4], inputs[4:7]
+        add_out = inputs[7] if len(inputs) > 7 else {}
+        return pred_logits, vae_inputs_lab, vae_inputs_unlab, add_out
+
     def forward(self, inputs, y=None, X=None):
         """Compute the SSL VAE loss.
 
@@ -56,8 +62,8 @@ class SSLVAELoss(VAELoss):
         Parameters
         ----------
         inputs : tuple
-            Tuple of (y_hat, z_sample, reconstruct, *). This can directly take the output
-            of VAE.
+            Tuple of (pred_logits, *vae_inputs_lab, *vae_inputs_unlab, add_out).
+            This can directly take the output of SSLVAE.
 
         y : torch.Tensor, size = [batch_size]
             Labels. -1 for unlabelled. `None` if all unlabelled.
@@ -68,48 +74,48 @@ class SSLVAELoss(VAELoss):
         assert X is not None
         assert y is not None
 
-        pred_logits = inputs[0]
-
-        # reverts back to have (y_hat, reconstruct, z_sample, *) like for VAELoss
-        inputs = (inputs[2], inputs[1]) + inputs[3:]
-
+        pred_logits, vae_inputs_lab, vae_inputs_unlab, add_out = self._split_inputs(inputs)
+        add_out_lab, add_out_unlab = split_labelled_unlabelled(add_out, y)
         X_lab, X_unlab = split_labelled_unlabelled(X, y)
-        _, pred_logits_unlab = split_labelled_unlabelled(pred_logits, y)
-        # concatenated in dim='' : the first n_lab are the labelled ones and
-        # the rest are unlabelled
-        inputs_lab, inputs_unlab = split_labelled_unlabelled(inputs, y, is_ordered=True)
+        pred_logits_lab, pred_logits_unlab = split_labelled_unlabelled(pred_logits, y)
+        n_lab, n_unlab = pred_logits_lab.size(0), pred_logits_unlab.size(0)
         labelled_loss = unlabelled_loss = 0
 
-        if (y != -1).sum() != 0:
-            labelled_loss = self._labelled_loss(inputs_lab, X_lab)
-        if (y == -1).sum() != 0:
-            unlabelled_loss = self._unlabelled_loss(inputs_unlab, X_unlab, pred_logits_unlab)
+        if n_lab != 0:
+            labelled_loss = self._labelled_loss(vae_inputs_lab, X_lab, **add_out_lab)
+
+        if n_unlab != 0:
+            unlabelled_loss = self._unlabelled_loss(vae_inputs_unlab, X_unlab,
+                                                    pred_logits_unlab, **add_out_unlab)
 
         # - log q(y|x)
         classifier_loss = self.criterion_y(pred_logits, y)
 
         return labelled_loss + unlabelled_loss + self.alpha * classifier_loss
 
-    def _unlabelled_loss(self, vae_inputs, X, pred_logits):
+    def _unlabelled_loss(self, vae_inputs, X, pred_logits, **kwargs):
         """for unlabelled data: E_y [labelled loss] - H[q(y|x)]"""
         p_y_hat = F.softmax(pred_logits, dim=-1)
         n_unlab, y_dim = pred_logits.shape
 
         def _get_vae_inputs(i):
-            return tuple(inp[n_unlab * i:n_unlab * (i + 1), ...] for inp in vae_inputs)
+            return tuple(inp[:, i, ...] for inp in vae_inputs)
 
-        expected_lab_loss = sum(self._labelled_loss(_get_vae_inputs(i), X, weight=p_y_hat[:, i])
+        expected_lab_loss = sum(self._labelled_loss(_get_vae_inputs(i), X,
+                                                    weight=p_y_hat[:, i],
+                                                    **kwargs)
                                 for i in range(y_dim))
 
         # H[q(y|x)] = -dot(q,log(q))
         ent_y = - torch.bmm(p_y_hat.view(-1, 1, y_dim),
                             F.log_softmax(pred_logits, dim=-1).view(-1, y_dim, 1)
                             ).mean()
+
         return expected_lab_loss - ent_y
 
-    def _labelled_loss(self, vae_inputs, X, **kwargs):
+    def _labelled_loss(self, vae_inputs, X, weight=None, **kwargs):
         """for labelled data: - log p(x|y,z) + beta KL(q(z|x,y)||p(z))"""
-        return super().forward(vae_inputs, X=X, **kwargs)
+        return super().forward(vae_inputs, X=X, weight=weight)
 
 
 # MODEL
@@ -121,27 +127,38 @@ class SSLVAE(nn.Module):
 
     Parameters
     ----------
-    x_shape : array-like
+    x_shape: array-like
         Shape of a single example x.
 
-    y_dim : int
+    y_dim: int
         Number of classes.
 
-    z_dim : int, optional
+    z_dim: int, optional
         Number of latent dimensions.
 
-    Encoder : nn.Module, optional
-        Encoder module which maps x,y -> z. It should be callable with
-        `encoder(x_shape, y_dim, n_out)`. If you have an encoder that maps x -> z
-        you convert it via `add_flat_input(Encoder)`.
+    transform_dim: int, optional
+        Number of dimension after applying a differential transform on the input
+        x. If `None` does not apply any transforms. This is very useful for high
+        dimesnional non flat inputs (like images) such that the encoder and decoder
+        only use a low dimensional input. The tranformed vector will be passed through
+        a relu activation before encoder / classifier (so not 2 linear layers in a row)
 
-    Decoder : nn.Module, optional
-        Decoder module which maps z,y -> x. It should be callable with
+    Encoder: nn.Module, optional
+        Encoder module which maps X(_transf), y -> z_suff_stat. It should be callable
+        with `encoder(x_shape, y_dim, n_out)`. If you have an encoder that maps
+        x -> z you can convert it via `add_flat_input(Encoder)`.
+
+    Decoder: nn.Module, optional
+        Decoder module which maps [z;y] -> X. It should be callable with
         `decoder(z_dim, x_shape)`. No non linearities should be applied to the
         output.
 
-    Classifier : nn.Module, optional
-        Classifier module which mapy X -> y. The last layer should be a softmax.
+    Classifier: nn.Module, optional
+        Classifier module which mapy X(_transf) -> y. The last layer should be a softmax.
+
+    Transformer: nn.Module, optional
+        Transformer module which maps X -> X_transf. Only used if `transform_dim` is not
+        None. See `transform_dim` for more details.
 
     Reference
     ---------
@@ -150,19 +167,29 @@ class SSLVAE(nn.Module):
         information processing systems (pp. 3581-3589).
     """
 
-    def __init__(self, x_shape, y_dim, z_dim=64,
-                 Encoder=add_flat_input(WideResNet),
-                 Decoder=ReversedSimpleCNN,
-                 Classifier=MLP):
+    def __init__(self, x_shape, y_dim,
+                 z_dim=64,
+                 transform_dim=None,
+                 Encoder=add_flat_input(MLP),
+                 Decoder=ReversedWideResNet,
+                 Classifier=MLP,
+                 Transformer=WideResNet):
 
         super().__init__()
         self.x_shape = x_shape
+        self.transform_dim = transform_dim
         self.y_dim = y_dim
         self.z_dim = z_dim
+        self.transform_dim = transform_dim
 
-        self.encoder = Encoder(x_shape, y_dim, z_dim * 2)
-        self.decoder = Decoder(y_dim + z_dim, x_shape)
-        self.classifier = Classifier(x_shape, y_dim)
+        if self.transform_dim is not None:
+            self.transformer = Transformer(self.x_shape, self.transform_dim)
+        else:
+            transform_dim = x_shape
+
+        self.classifier = Classifier(transform_dim, self.y_dim)
+        self.encoder = Encoder(transform_dim, self.y_dim, self.z_dim * 2)
+        self.decoder = Decoder(self.y_dim + self.z_dim, self.x_shape)
 
         self.reset_parameters()
 
@@ -173,13 +200,6 @@ class SSLVAE(nn.Module):
         """
         Forward pass of model.
 
-        Note
-        ----
-        - order of output is different than in `VAE` because second output (z_sample) is
-        used for .transform while first output (pred_logits) is used for .predict
-        - the outputs are concatenated for all possible values of y rather than
-        stacked because might not have same number of label and unlabelled.
-
         Parameters
         ----------
         X : torch.Tensor, size = [batch_size, *x_shape]
@@ -189,36 +209,44 @@ class SSLVAE(nn.Module):
             Labels. -1 for unlabelled. `None` if all unlabelled.
 
         Returns
-        ------
+        -------
         pred_logits: torch.Tensor, size = [batch_size, y_dim]
             Multinomial logits (i.e. no softmax).
 
-        (z_sample, )
+        z_sample_lab: torch.Tensor, size = [n_lab, z_dim]
+            Latent sample of labelled data.
 
-        z_sample: torch.Tensor, size = [n_lab + n_unlab*y_dim, z_dim]
-            Latent sample. The first dimension corresponds to [labbeled] +
-            [all possible values of y when unlabelled]
+        z_suff_stat_lab: torch.Tensor, size = [n_lab, z_dim*2]
+            Sufficient statistics of the labelled latent sample {mu; logvar}.
 
-        reconstruct: torch.Tensor, size = [n_lab + n_unlab*y_dim, *x_shape]
-            Reconstructed image. Values between 0,1 (i.e. after logistic).
-            The first dimension corresponds to [labbeled] +
-            [all possible values of y when unlabelled]
+        reconstruct_lab: torch.Tensor, size = [n_lab, *x_shape]
+            Reconstructed labelled image. Values between 0,1 (i.e. after logistic).
 
-        z_suff_stat: torch.Tensor, size = [n_lab + n_unlab*y_dim, z_dim*2]
-            Sufficient statistics of the latent sample {mu; logvar}.  The first
-            dimension corresponds to [labbeled] + [all possible values of y when unlabelled]
+        z_sample_unlab: torch.Tensor, size = [n_unlab, y_dim, z_dim]
+            Latent sample of labelled data. Stacked on first dimension for
+            each possible y (in order).
+
+        z_suff_stat_unlab: torch.Tensor, size = [n_unlab, y_dim, z_dim*2]
+            Sufficient statistics of the labelled latent sample {mu; logvar}.
+            Stacked on first dimension for each possible y (in order).
+
+        reconstruct_unlab: torch.Tensor, size = [n_unlab, y_dim, *x_shape]
+            Reconstructed labelled image. Values between 0,1 (i.e. after logistic).
+            Stacked on first dimension for each possible y (in order).
         """
-        import pdb
-        pdb.set_trace()
-
         device = X.device
         batch_size = X.size(0)
-        # following line is not used in sslvae but might be in classes that
-        # inherit from it (E.g. auxsslvae)
-        add_out = self._get_additional_outputs(X)
 
         if y is None:
             y = torch.tensor([-1], device=device).expand(batch_size)
+
+        if self.transform_dim is not None:
+            X = self.transformer(X)
+            X = torch.relu(X)  # make sure not 2 linear layer in a row
+
+        # following line is not used in sslvae but might be in classes that
+        # inherit from it (E.g. auxsslvae)
+        add_out = self._get_additional_outputs(X)
 
         X_lab, X_unlab = split_labelled_unlabelled(X, y)
         y_lab, y_unlab = split_labelled_unlabelled(y, y)
@@ -227,30 +255,25 @@ class SSLVAE(nn.Module):
 
         pred_logits = self.classify(X, **add_out)
 
-        if (y != -1).sum() != 0:
+        assert n_lab != 0 or n_unlab != 0
+        if n_lab != 0:
             y_lab_onehot = torch.zeros_like(pred_logits[:n_lab, ...]
                                             ).scatter_(1, y_lab.view(-1, 1), 1)
             out_lab = self._forward_labelled(X_lab, y_lab_onehot, **add_out_lab)
-            n_out = len(out_lab)
-            # following to make sure you can concat even if only unlabbled
-            _get_out_lab = lambda i: (out_lab[i],)  # make the output a tuple for concat
 
-        else:
-            _get_out_lab = lambda _: ()
-
-        if (y == -1).sum() != 0:
+        if n_unlab != 0:
             # no copying
             y_unlab_onehot = torch.zeros_like(pred_logits[:1, ...]).expand(n_unlab, self.y_dim)
-            out_unlab_tuple = self._forward_unlabelled(X_unlab, y_unlab_onehot, **add_out_unlab)
-            n_out = len(out_unlab_tuple)
-            _get_out_unlab = lambda i: out_unlab_tuple[i]
-        else:
-            _get_out_unlab = lambda _: ()
+            out_unlab = self._forward_unlabelled(X_unlab, y_unlab_onehot, **add_out_unlab)
 
-        out = tuple(torch.cat(_get_out_lab(i) + _get_out_unlab(i), dim=0)
-                    for i in range(n_out))
-        out = (pred_logits,) + out
-        if len(add_out) != 0:
+        # make sure same numebr of outputs (even if empty)
+        if n_lab == 0:
+            out_lab = tuple(torch.tensor([]) for _ in out_unlab)
+        if n_unlab == 0:
+            out_unlab = tuple(torch.tensor([]) for _ in out_lab)
+
+        out = (pred_logits,) + out_lab + out_unlab
+        if len(add_out) > 0:
             out += (add_out,)
 
         # see outputs in docstrings
@@ -274,8 +297,7 @@ class SSLVAE(nn.Module):
         z_suff_stat = self.encoder(X, y_onehot)
         z_sample = self.reparameterize(z_suff_stat)
         reconstruct = torch.sigmoid(self.decoder(torch.cat((z_sample, y_onehot), dim=1)))
-
-        return z_sample, reconstruct, z_suff_stat
+        return z_sample, z_suff_stat, reconstruct
 
     def _forward_unlabelled(self, X, y_onehot, **kwargs):
         """Same as for labelled but want to marginalize out labels => compute outputs for all y"""
@@ -288,6 +310,8 @@ class SSLVAE(nn.Module):
                for l in range(self.y_dim)]
         # ([out1_l1, out1_l2, ...], [out2_l1, out2_l2, ...])
         out = cont_tuple_to_tuple_cont(out)
+        # stack the list of tensors on first dim
+        out = tuple(torch.stack(o, dim=1) for o in out)
         return out
 
     def sample_decode(self, z, y):

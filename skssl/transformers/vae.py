@@ -43,7 +43,7 @@ class VAELoss(nn.Module):
         Parameters
         ----------
         inputs : tuple
-            Tuple of (reconstruct, z_sample, z_suff_stat, *). This can directly
+            Tuple of (z_sample, z_suff_stat, reconstruct, *). This can directly
             take the output of VAE.
 
         y : None
@@ -57,7 +57,7 @@ class VAELoss(nn.Module):
         """
         X = X["X"] if isinstance(X, dict) else X
         assert X is not None
-        reconstruct, z_sample, z_suff_stat = inputs[:3]
+        z_sample, z_suff_stat, reconstruct = inputs[:3]
         rec_loss = reconstruction_loss(X, reconstruct, distribution=self.distribution)
         kl_loss = kl_normal_loss(z_suff_stat)
         loss = rec_loss + self.get_beta(self.training) * kl_loss
@@ -134,7 +134,8 @@ class VAE(nn.Module):
         z_suff_stat = self.encoder(X)
         z_sample = reparameterize(z_suff_stat, is_sample=self.training)
         reconstruct = torch.sigmoid(self.decoder(z_sample))
-        return reconstruct, z_sample, z_suff_stat
+        # z_sample should be first output vecause will be the one for `.transform`
+        return z_sample, z_suff_stat, reconstruct
 
     def sample_decode(self, z):
         """

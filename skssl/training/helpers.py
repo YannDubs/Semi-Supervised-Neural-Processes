@@ -57,39 +57,37 @@ def make_ssl_input(dataset, y=None):
     """
     if isinstance(dataset, dict):
         y = dataset["y"]
-        dataset = dataset["X"]
-
-    if y is None:
-        # forward takes y as argument and want to batch split it => put it in X
-        # for X only get frst item of dataset => transformed data
-        return ({'X': get_only_first_item(dataset),
-                 "y": dataset.targets},
-                dataset.targets)
+        X = dataset["X"]
+    elif isinstance(dataset, torch.utils.data.Dataset):
+        if y is None:
+            try:
+                y = dataset.targets
+            except AttributeError:
+                y = dataset.y  # skorch datasets
+        X = get_only_first_item(dataset)
     else:
-        return ({'X': dataset, "y": y}, y)
+        # array-like or tensor
+        X = dataset
+
+    return ({'X': X, "y": y}, y)
 
 
-def split_labelled_unlabelled(to_split, y, is_ordered=False):
+def split_labelled_unlabelled(to_split, y):
     """
     Split an array like, or a list / tuple / dictionary of arrays like in a
-    labelled and unlabbeled part. If `is_ordered` then first `(y!=-1).sum()` on
-    dim=0 are labeleld and the rest unlabelled.
+    labelled and unlabbeled part.
     """
     if isinstance(to_split, dict):
-        lab_unlab = {k: split_labelled_unlabelled(v, y, is_ordered=is_ordered)
+        lab_unlab = {k: split_labelled_unlabelled(v, y)
                      for k, v in to_split.items()}
         if len(lab_unlab) == 0:
             return {}, {}
     elif isinstance(to_split, list) or isinstance(to_split, tuple):
-        lab_unlab = [split_labelled_unlabelled(i, y, is_ordered=is_ordered) for i in to_split]
+        lab_unlab = [split_labelled_unlabelled(i, y) for i in to_split]
         if len(lab_unlab) == 0:
             return [], []
     else:
-        if is_stacked:
-            n_lab = (y != -1).sum()
-            return to_split[:n_lab, ...], to_split[n_lab:, ...]
-        else:
-            return to_split[y != -1], to_split[y == -1]
+        return to_split[y != -1], to_split[y == -1]
 
     lab, unlab = cont_tuple_to_tuple_cont(lab_unlab)
     return lab, unlab
