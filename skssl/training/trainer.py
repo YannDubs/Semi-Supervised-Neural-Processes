@@ -108,17 +108,6 @@ class NeuralNetEstimator(skorch.NeuralNet):
 
         return super().fit(X, y=y, **fit_params)
 
-    """
-    def infer(self, x, **fit_params):
-        x = to_tensor(x, device=self.device)
-        if isinstance(x, dict):
-            import pdb
-            pdb.set_trace()
-            x_dict = self._merge_x_and_fit_params(x, fit_params)
-            return self.module_(**x_dict)
-        return self.module_(x, **fit_params)
-    """
-
     def get_loss(self, y_pred, y_true, X=None, training=False):
         # same but tries to redirect X
         y_true = to_tensor(y_true, device=self.device)
@@ -209,4 +198,14 @@ transform = """
 
 class NeuralNetTransformer(NeuralNetEstimator, TransformerMixin):
     __doc__ = get_doc(skorch.NeuralNet, add_methods=transform)
-    transform = NeuralNetEstimator.predict
+
+    def transform(self, X):
+        """Transform an input."""
+        self.module_.is_transform = True
+        X_transf = []
+        for out in self.forward_iter(X, training=False):
+            out = out[0] if isinstance(out, tuple) else out
+            X_transf.append(to_numpy(out))
+        X_transf = np.concatenate(X_transf, 0)
+        self.module_.is_transform = False
+        return X_transf
