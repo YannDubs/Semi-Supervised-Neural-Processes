@@ -1,9 +1,11 @@
+import random
+
 import numpy as np
 import torch
 
 from skorch.callbacks import Callback
 
-from skssl.utils.helpers import cont_tuple_to_tuple_cont
+from skssl.utils.helpers import cont_tuple_to_tuple_cont, ratio_to_int
 
 
 class FixRandomSeed(Callback):
@@ -49,11 +51,11 @@ def get_only_first_item(to_index):
     return FirstIndex(to_index)
 
 
-def make_ssl_input(dataset, y=None):
+def make_Xy_input(dataset, y=None):
     """
     Transform a dataset X to a variable that can be directly used like so:
-    `NeuralNetEstimator.fit(*make_ssl_input(dataset))` for SSL. Namely, giving both
-    `X` and `y` as input to `forward`. can also give a X and y.
+    `NeuralNetEstimator.fit(*make_Xy_input(dataset))` when both `X` and `y`
+    should be inputs to `forward`. Can also give a X and y.
     """
     if isinstance(dataset, dict):
         y = dataset["y"]
@@ -91,3 +93,54 @@ def split_labelled_unlabelled(to_split, y):
 
     lab, unlab = cont_tuple_to_tuple_cont(lab_unlab)
     return lab, unlab
+
+
+def context_target_split(X, Y,
+                         range_cntxts=(.1, .5),
+                         range_extra_trgts=(.1, .5),
+                         is_all_trgts=False):
+    """Given inputs X and their value y, return random subsets of points for
+    context and target.
+
+    Notes
+    -----
+    - modified from: github.com/EmilienDupont/neural-processes
+    - context will be part of targets
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        Shape (batch_size, num_points, x_dim)
+
+    Y : torch.Tensor
+        Shape (batch_size, num_points, y_dim)
+
+    range_cntxts : tuple of int or floats, optional
+        Range for the number of context points (min_range, max_range) if values are
+        smaller than 1 these represent a percentage of points.
+
+    range_extra_trgts : tuple of int or floats, optional
+        Range for the number of additional target points (min_range, max_range) if
+        values are smaller than 1 these represent a percentage of points.
+
+    is_all_trgts : bool, optional
+        Whether to always use all the targets.
+    """
+    n_possible_points = X.size(1)
+    intify = lambda x: ratio_to_int(x, n_possible_points)
+
+    n_extra_trgts = random.randint(intify(range_extra_trgts[0]),
+                                   intify(range_extra_trgts[1]))
+    n_cntxts = random.randint(intify(range_cntxts[0]),
+                              intify(range_cntxts[1]))
+    n_trgts = (n_cntxts + n_extra_trgts) if is_all_trgts else n_possible_points
+
+    # Sample locations of context and target points
+    locations = np.random.choice(n_possible_points,
+                                 size=n_trgts,
+                                 replace=False)
+    X_cntxt = X[:, locations[:n_cntxts], :]
+    Y_cntxt = Y[:, locations[:n_cntxts], :]
+    X_trgt = X[:, locations, :]
+    Y_trgt = Y[:, locations, :]
+    return X_cntxt, Y_cntxt, X_trgt, Y_trgt

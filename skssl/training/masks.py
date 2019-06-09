@@ -1,3 +1,9 @@
+import functools
+
+import torch
+import numpy as np
+
+from skssl.utils.helpers import ratio_to_int
 
 
 def random_masker(batch_size, mask_shape,
@@ -30,12 +36,15 @@ def random_masker(batch_size, mask_shape,
     return mask
 
 
-def masker_composes(maskers):
-    """Return a masker composed of a list of maskers."""
-    def masker_coposed(batch_size, mask_shape):
-        mask = no_masker(batch_size, mask_shape)
-        for masker in maskers:
-            mask *= masker(batch_size, mask_shape)
+def and_masks(*masks):
+    """Composes tuple of masks by an and operation."""
+    mask = functools.reduce(lambda a, b: a & b, masks)
+    return mask
+
+
+def or_masks(*masks):
+    """Composes tuple of masks by an or operation."""
+    mask = functools.reduce(lambda a, b: a | b, masks)
     return mask
 
 

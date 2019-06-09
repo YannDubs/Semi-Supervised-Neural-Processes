@@ -15,7 +15,7 @@ from skorch.dataset import Dataset
 from skorch.utils import to_numpy, to_tensor
 
 
-from .helpers import FixRandomSeed, make_ssl_input
+from .helpers import FixRandomSeed, make_Xy_input
 from .loaders import get_ssl_iterator
 
 __all__ = ["NeuralNetEstimator", "NeuralNetTransformer", "NeuralNetClassifier"]
@@ -108,6 +108,17 @@ class NeuralNetEstimator(skorch.NeuralNet):
 
         return super().fit(X, y=y, **fit_params)
 
+    """
+    def infer(self, x, **fit_params):
+        x = to_tensor(x, device=self.device)
+        if isinstance(x, dict):
+            import pdb
+            pdb.set_trace()
+            x_dict = self._merge_x_and_fit_params(x, fit_params)
+            return self.module_(**x_dict)
+        return self.module_(x, **fit_params)
+    """
+
     def get_loss(self, y_pred, y_true, X=None, training=False):
         # same but tries to redirect X
         y_true = to_tensor(y_true, device=self.device)
@@ -152,7 +163,7 @@ class NeuralNetClassifier(NeuralNetEstimator, skorch.NeuralNetClassifier, Classi
         self.is_ssl = is_ssl
         if self.is_ssl:
             if devset is not None:
-                devset = Dataset(*make_ssl_input(devset))
+                devset = Dataset(*make_Xy_input(devset))
 
             assert "iterator_train" not in kwargs
             kwargs["iterator_train"] = get_ssl_iterator
@@ -166,7 +177,7 @@ class NeuralNetClassifier(NeuralNetEstimator, skorch.NeuralNetClassifier, Classi
 
     def fit(self, X, y=None, **fit_params):
         if self.is_ssl:
-            return skorch.NeuralNet.fit(self, *make_ssl_input(X, y=y), **fit_params)
+            return skorch.NeuralNet.fit(self, *make_Xy_input(X, y=y), **fit_params)
         return NeuralNetEstimator.fit(self, X, y=y, **fit_params)
 
     def predict_proba(self, X):
@@ -191,8 +202,8 @@ class NeuralNetClassifier(NeuralNetEstimator, skorch.NeuralNetClassifier, Classi
 
 
 transform = """
-transform:
-    Ridirect to `.predict`.
+    transform:
+        Ridirect to `.predict`.
     """
 
 

@@ -62,22 +62,16 @@ class MLP(nn.Module):
         self.reset_parameters()
 
     def forward(self, x):
-        try:
-            out = self.to_hidden(x)
+        out = self.to_hidden(x)
+        out = self.activation(out)
+        out = self.dropout(out)
+
+        for linear in self.linears:
+            out = linear(out)
             out = self.activation(out)
             out = self.dropout(out)
 
-            for linear in self.linears:
-                out = linear(out)
-                out = self.activation(out)
-                out = self.dropout(out)
-
-            out = self.out(out)
-
-        except Exception as e:
-            import pdb
-            pdb.set_trace()
-            print(e)
+        out = self.out(out)
         return out
 
     def reset_parameters(self):

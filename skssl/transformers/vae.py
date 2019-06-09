@@ -108,7 +108,7 @@ class VAE(nn.Module):
     def reset_parameters(self):
         weights_init(self)
 
-    def forward(self, X):
+    def forward(self, X, y=None):
         """
         Forward pass of model.
 
@@ -117,8 +117,8 @@ class VAE(nn.Module):
         X : torch.Tensor, size = [batch_size, *x_shape]
             Batch of data.
 
-        y : torch.Tensor, size = [batch_size]
-            Labels. -1 for unlabelled. `None` if all unlabelled.
+        y: None
+            Placeholder
 
         Returns
         ------
