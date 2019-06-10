@@ -4,6 +4,8 @@ import torch.nn as nn
 from skssl.utils.initialization import weights_init
 from .mlp import MLP
 
+__all__ = ["add_flat_input"]
+
 
 class MergeFlatAndNotFlatInputs(nn.Module):
     """
@@ -51,7 +53,7 @@ class MergeFlatAndNotFlatInputs(nn.Module):
 
     def forward(self, x, flat_input):
         non_flat_out = self.non_flat_module(x)
-        out = self.mixer(torch.cat((non_flat_out, flat_input), dim=1))
+        out = self.mixer(torch.cat((non_flat_out, flat_input), dim=-1))
         return out
 
     def reset_parameters(self):
@@ -87,7 +89,7 @@ class MergeFlatInputs(nn.Module):
         self.reset_parameters()
 
     def forward(self, x1, x2):
-        return self.flat_module(torch.cat((x1, x2), dim=1))
+        return self.flat_module(torch.cat((x1, x2), dim=-1))
 
     def reset_parameters(self):
         weights_init(self)

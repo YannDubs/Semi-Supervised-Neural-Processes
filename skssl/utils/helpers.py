@@ -186,3 +186,12 @@ class HyperparameterInterpolator:
             current = self.final_value
 
         return current
+
+
+def rescale_range(X, old_range, new_range):
+    """Rescale X linearly to be in `new_range` rather than `old_range`."""
+    old_min = old_range[0]
+    new_min = new_range[0]
+    old_delta = old_range[1] - old_min
+    new_delta = new_range[1] - new_min
+    return (((X - old_min) * new_delta) / old_delta) + new_min

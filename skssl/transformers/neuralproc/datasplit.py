@@ -78,11 +78,11 @@ def context_target_split(X, Y,
 
     Parameters
     ----------
-    X : torch.Tensor
-        Shape (batch_size, num_points, x_dim)
+    X : torch.Tensor, size = [batch_size, num_points, x_dim]
+        Position features. Values should always be in [-1,1].
 
-    Y : torch.Tensor
-        Shape (batch_size, num_points, y_dim)
+    Y : torch.Tensor, size = [batch_size, num_points, y_dim]
+        Targets.
 
     range_cntxts : tuple of int or floats, optional
         Range for the number of context points (min_range, max_range) if values are

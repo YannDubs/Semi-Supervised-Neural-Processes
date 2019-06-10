@@ -1,4 +1,5 @@
 import math
+import sys
 from PIL import Image
 
 import numpy as np
@@ -6,6 +7,10 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.gaussian_process.kernels import RBF
 from sklearn.gaussian_process import GaussianProcessRegressor
+
+sys.path.append("..")
+
+from skssl.utils.helpers import rescale_range
 
 __all__ = ["SineDataset", "GPDataset"]
 
@@ -44,6 +49,10 @@ class GPDataset(Dataset):
         self.data = torch.from_numpy(np.linspace(*self.min_max, num_points))
         self.data = self.data.view(1, -1, 1)
         self.data = self.data.expand(self.num_samples, self.num_points, 1).float()
+
+        # rescale features to [-1,1]
+        self.data = rescale_range(self.data, self.min_max, (-1, 1))
+
         self.precompute_data()
 
     def precompute_data(self):
@@ -128,6 +137,9 @@ class SineDataset(Dataset):
         # Shape (num_samples, num_points, y_dim)
         self.targets = (a * torch.sin(self.data - b)
                         ) + torch.randn_like(self.data) * self.std_noise
+
+        # rescale features to [-1,1]
+        self.data = rescale_range(self.data, self.min_max, (-1, 1))
 
     def __getitem__(self, index):
         return self.data[index], self.targets[index]

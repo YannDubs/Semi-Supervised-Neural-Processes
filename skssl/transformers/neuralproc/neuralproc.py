@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.kl import kl_divergence
 
-from skssl.predefined import MLP, DeepMLP
+from skssl.predefined import MLP, DeepMLP, add_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
 
@@ -32,9 +32,17 @@ class NeuralProcess(nn.Module):
     r_dim : int, optional
         Dimension of representation.
 
+    XEncoder : nn.Module, optional
+        Spatial encoder module which maps {x_i} -> x_transf_i. It should be
+        constructable via `xencoder(x_dim, x_transf_dim)`. Use `MLP` to learn
+        positional encodings and `SinusoidalEncodings` to use sinusoidal positional
+        encodings.
+
     XYEncoder : nn.Module, optional
-        Encoder module which maps {[x_i;y_i]} -> {r_i}. It should be constructed
-        via `encoder(n_in, n_out)`.
+        Encoder module which maps {x_transf_i, y_i} -> {r_i}. It should be constructable
+        via `xyencoder(x_transf_dim, y_dim, n_out)`. If you have an encoder that maps
+        xy -> r you can convert it via `add_flat_input(Encoder)`. E.g.
+        `add_flat_input(MLP)` or `SelfAttentionEncoder`.
 
     Decoder : nn.Module, optional
         Decoder module which maps {[r;x_t]} -> {y_hat_t}. It should be constructed via
@@ -76,7 +84,8 @@ class NeuralProcess(nn.Module):
     """
 
     def __init__(self, x_dim, y_dim,
-                 XYEncoder=DeepMLP,
+                 XEncoder=MLP,
+                 XYEncoder=add_flat_input(DeepMLP),
                  Decoder=DeepMLP,
                  r_dim=128,
                  aggregator=torch.mean,
@@ -92,7 +101,8 @@ class NeuralProcess(nn.Module):
 
         rz_dim = self.r_dim * 2 if self.encoded_path == "both" else self.r_dim
 
-        self.xy_encoder = XYEncoder(self.x_dim + self.y_dim, self.r_dim)
+        self.x_encoder = XEncoder(self.x_dim, self.r_dim)
+        self.xy_encoder = XYEncoder(self.r_dim, self.y_dim, self.r_dim)
         self.aggregator = aggregator
         self.decoder = Decoder(rz_dim + self.x_dim, self.y_dim * 2)  # *2 because mean and var
 
@@ -189,7 +199,8 @@ class NeuralProcess(nn.Module):
     def latent_path(self, X, Y):
         """Latent encoding path."""
         # batch_size, n_cntxt, r_dim
-        R_cntxt = self.xy_encoder(torch.cat((X, Y), dim=-1))
+        X_transf = self.x_encoder(X)
+        R_cntxt = self.xy_encoder(X_transf, Y)
         # batch_size, r_dim
         r = self.aggregator(R_cntxt, dim=1)
 
@@ -210,7 +221,8 @@ class NeuralProcess(nn.Module):
         to give a target specific representation (e.g. attentive neural processes.
         """
         # batch_size, n_cntxt, r_dim
-        R_cntxt = self.xy_encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
+        X_transf = self.x_encoder(X_cntxt)
+        R_cntxt = self.xy_encoder(X_transf, Y_cntxt)
         # batch_size, r_dim
         r = self.aggregator(R_cntxt, dim=1)
 
@@ -271,9 +283,6 @@ class AttentiveNeuralProcess(NeuralProcess):
     y_dim : int
         Dimension of y values.
 
-    XEncoder : nn.module, optional
-        Encoder from xi -> ri. Used to encode the keys and queries.
-
     attention : {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
                 "euclidean", "cosine"}, optional
         Type of attention to use. More details in `get_attender`.
@@ -292,7 +301,6 @@ class AttentiveNeuralProcess(NeuralProcess):
     """
 
     def __init__(self, x_dim, y_dim,
-                 XEncoder=MLP,
                  attention="scaledot",
                  is_normalize=True,
                  encoded_path="both",
@@ -300,7 +308,6 @@ class AttentiveNeuralProcess(NeuralProcess):
 
         super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
-        self.x_encoder = XEncoder(self.x_dim, self.r_dim)
         self.attender = get_attender(attention, self.r_dim, is_normalize=is_normalize)
 
         self.reset_parameters()
@@ -312,7 +319,12 @@ class AttentiveNeuralProcess(NeuralProcess):
         """
         # batch_size, n_cntxt, r_dim
         keys = self.x_encoder(X_cntxt)
-        values = self.xy_encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
+        values = self.xy_encoder(X_cntxt, Y_cntxt)
+
+        if X_trgt is None:
+            r = self.aggregator(values, dim=1)
+            # transforming, don't expand the representation : batch_size, r_dim
+            return r
 
         # batch_size, n_n_trgt, r_dim
         queries = self.x_encoder(X_trgt)
@@ -320,6 +332,21 @@ class AttentiveNeuralProcess(NeuralProcess):
         # batch_size, n_trgt, value_size
         R_attn = self.attender(keys, queries, values)
         return R_attn
+
+    def deterministic_path(self, X_cntxt, Y_cntxt, X_trgt):
+        """
+        Deterministic encoding path. `X_trgt` can be used in child classes
+        to give a target specific representation (e.g. attentive neural processes.
+        """
+        # batch_size, n_cntxt, r_dim
+        X_transf = self.x_encoder(X_cntxt)
+        R_cntxt = self.xy_encoder(X_transf, Y_cntxt)
+        # batch_size, r_dim
+        r = self.aggregator(R_cntxt, dim=1)
+
+        batch_size, n_trgt, _ = X_trgt.shape
+        R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
+        return R
 
 
 def make_grid_neural_process(NP):

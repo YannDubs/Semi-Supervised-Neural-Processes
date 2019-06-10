@@ -1,4 +1,3 @@
-
 import abc
 import math
 import torch
@@ -11,7 +10,7 @@ from skssl.utils.initialization import weights_init, linear_init
 from skssl.utils.torchextend import identity
 
 
-__all__ = ["get_attender", "SelfAttentionEncoder"]
+__all__ = ["get_attender"]
 
 
 def get_attender(attention, kq_size=None, is_normalize=True, **kwargs):
@@ -66,60 +65,12 @@ def get_attender(attention, kq_size=None, is_normalize=True, **kwargs):
         attender = DistanceAttender(p=2, is_normalize=is_normalize, **kwargs)
     elif attention == "multihead":
         attender = MultiheadAttender(kq_size, **kwargs)
-    elif attention == "imagetransformer":
-        attender = ImageTransformerAttender(kq_size, **kwargs)
+    elif attention == "transformer":
+        attender = TransformerAttender(kq_size, **kwargs)
     else:
         raise ValueError("Unknown attention method {}".format(attention))
 
     return attender
-
-
-class SelfAttentionEncoder(nn.Module):
-    """Self Encoder Layer.
-
-    Parameters
-    ----------
-    inp_dim : int
-        Input dimension.
-
-    inp_dim : int
-        Input dimension.
-
-    PreEncoder : nn.Module, optional
-        Transformation of the inputs before the self attention.
-
-    n_attn_layers : int, optional
-        Number of self attention layers.
-
-    attention : {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
-                "euclidean", "cosine"}, optional
-        Type of attention to use. More details in `get_attender`.
-
-    is_normalize : bool, optional
-        Whether qttention weights should sum to 1 (using softmax). If not weights
-        will be in [0,1] but not necessarily sum to 1.
-    """
-
-    def __init__(self, inp_dim, out_dim,
-                 PreEncoder=MLP,
-                 n_attn_layers=2,
-                 attention="scaledot",
-                 is_normalize=True):
-        super().__init__()
-        self.inp_dim = inp_dim
-        self.out_dim = out_dim
-        self.pre_encoder = PreEncoder(inp_dim, out_dim)
-        self.attn_layers = nn.ModuleList([get_attender(attention, self.out_dim,
-                                                       is_normalize=is_normalize)
-                                          for _ in range(n_attn_layers)])
-
-    def forward(self, inputs):
-        out = self.pre_encoder(inputs)
-
-        for attn_layer in self.attn_layers:
-            out = attn_layer(out, out, out)
-
-        return out
 
 
 class BaseAttender(abc.ABC, nn.Module):
@@ -452,7 +403,7 @@ class MultiheadAttender(nn.Module):
         return kvq
 
 
-class ImageTransformerAttender(MultiheadAttender):
+class TransformerAttender(MultiheadAttender):
     """
     Image Transformer attention mechanism [1].
 
