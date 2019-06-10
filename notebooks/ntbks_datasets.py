@@ -39,18 +39,28 @@ class GPDataset(Dataset):
         self.num_samples = num_samples
         self.num_points = num_points
         self.min_max = min_max
-
         self.gp = GaussianProcessRegressor(kernel=kernel)
 
-        X_ = np.linspace(*min_max, num_points)
-        y_samples = self.gp.sample_y(X_[:, np.newaxis], num_samples).transpose(1, 0)
+        self.data = torch.from_numpy(np.linspace(*self.min_max, num_points))
+        self.data = self.data.view(1, -1, 1)
+        self.data = self.data.expand(self.num_samples, self.num_points, 1).float()
+        self.precompute_data()
 
-        self.data = torch.from_numpy(X_)
-        self.data = self.data.view(1, -1, 1).expand(self.num_samples, self.num_points, 1).float()
-        self.targets = torch.from_numpy(y_samples).view(self.num_samples, self.num_points, 1).float()
+    def precompute_data(self):
+        self.counter = 0
+        X_ = np.linspace(*self.min_max, self.num_points)  # could take the one from self.data
+        y_samples = self.gp.sample_y(X_[:, np.newaxis], self.num_samples).transpose(1, 0)
+        y_samples = torch.from_numpy(y_samples)
+        self.targets = y_samples.view(self.num_samples, self.num_points, 1).float()
 
     def __getitem__(self, index):
-        return self.data[index], self.targets[index]
+        # doesn't use index because randomly gnerated in any case => sample
+        # in order which enables to know when epoch is finished and regenerate
+        # new functions
+        self.counter += 1
+        if self.counter == self.num_samples:
+            self.precompute_data()
+        return self.data[self.counter], self.targets[self.counter]
 
     def __len__(self):
         return self.num_samples

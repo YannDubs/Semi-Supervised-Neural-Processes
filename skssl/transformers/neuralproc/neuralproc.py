@@ -8,69 +8,12 @@ from torch.distributions.kl import kl_divergence
 from skssl.predefined import MLP
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
-from skssl.training.masks import random_masker, no_masker, or_masks
-from skssl.training.helpers import context_target_split
+
+from .datasplit import random_masker, no_masker, or_masks, context_target_split
+from .attention import get_attender
 
 
-__all__ = ["NeuralProcessLoss", "make_grid_neural_process", "NeuralProcess",
-           "AttentiveNeuralProcess"]
-
-
-# LOSS
-class NeuralProcessLoss(nn.Module):
-    """
-    Compute the Neural Process Loss [1].
-
-    Parameters
-    ----------
-    get_beta : callable, optional
-        Function which returns the weight of the kl divergence given `is_training`
-        . Returning a constant 1 corresponds to standard VAE.
-
-    References
-    ----------
-    [1] Garnelo, Marta, et al. "Neural processes." arXiv preprint
-        arXiv:1807.01622 (2018).
-    """
-
-    def __init__(self, get_beta=lambda _: 1):
-        super().__init__()
-        self.get_beta = get_beta
-
-    def forward(self, inputs, y=None, weight=None):
-        """Compute the Neural Process Loss averaged over the batch.
-
-        Parameters
-        ----------
-        inputs: tuple
-            Tuple of (p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt). This can directly take the
-            output of NueralProcess.
-
-        y: None
-            Placeholder.
-
-        weight: torch.Tensor, size = [batch_size,]
-            Weight of every example. If None, every example is weighted by 1.
-        """
-        p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt = inputs
-        batch_size = Y_trgt.size(0)
-
-        neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).sum(-1)
-
-        if q_z_trgt is not None:
-            # use latent variables and training
-            # note that during validation the kl will actually be 0 because
-            # we do not compute q_z_trgt
-            kl_loss = kl_divergence(q_z_trgt, q_z_cntxt).view(batch_size, -1).sum(-1)
-        else:
-            kl_loss = 0
-
-        loss = neg_log_like + self.get_beta(self.training) * kl_loss
-
-        if weight is not None:
-            loss = loss * weight
-
-        return loss.mean(dim=0)
+__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "make_grid_neural_process"]
 
 
 def _DeepMLP(*args):
@@ -137,7 +80,7 @@ class NeuralProcess(nn.Module):
     """
 
     def __init__(self, x_dim, y_dim,
-                 Encoder=_DeepMLP,
+                 XYEncoder=_DeepMLP,
                  Decoder=_DeepMLP,
                  r_dim=128,
                  aggregator=torch.mean,
@@ -153,7 +96,7 @@ class NeuralProcess(nn.Module):
 
         rz_dim = self.r_dim * 2 if self.encoded_path == "both" else self.r_dim
 
-        self.encoder = Encoder(self.x_dim + self.y_dim, self.r_dim)
+        self.xy_encoder = XYEncoder(self.x_dim + self.y_dim, self.r_dim)
         self.aggregator = aggregator
         self.decoder = Decoder(rz_dim + self.x_dim, self.y_dim * 2)  # *2 because mean and var
 
@@ -250,7 +193,7 @@ class NeuralProcess(nn.Module):
     def latent_path(self, X, Y):
         """Latent encoding path."""
         # batch_size, n_cntxt, r_dim
-        R_cntxt = self.encoder(torch.cat((X, Y), dim=-1))
+        R_cntxt = self.xy_encoder(torch.cat((X, Y), dim=-1))
         # batch_size, r_dim
         r = self.aggregator(R_cntxt, dim=1)
 
@@ -271,7 +214,7 @@ class NeuralProcess(nn.Module):
         to give a target specific representation (e.g. attentive neural processes.
         """
         # batch_size, n_cntxt, r_dim
-        R_cntxt = self.encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
+        R_cntxt = self.xy_encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
         # batch_size, r_dim
         r = self.aggregator(R_cntxt, dim=1)
 
@@ -332,6 +275,13 @@ class AttentiveNeuralProcess(NeuralProcess):
     y_dim : int
         Dimension of y values.
 
+    XEncoder : nn.module, optional
+        Encoder from xi -> ri. Used to encode the keys and queries.
+
+    attention : {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
+                "euclidean", "cosine"}, optional
+        Type of attention to use. More details in `get_attender`.
+
     kwargs :
         Additional arguments to `NeuralProcess`.
 
@@ -341,8 +291,17 @@ class AttentiveNeuralProcess(NeuralProcess):
         arXiv:1901.05761 (2019).
     """
 
-    def __init__(self, x_dim, y_dim, **kwargs):
-        pass
+    def __init__(self, x_dim, y_dim,
+                 XEncoder=MLP,
+                 attention="scaledot",
+                 **kwargs):
+
+        super().__init__(x_dim, y_dim, encoded_path="both", **kwargs)
+
+        self.x_encoder = XEncoder(self.x_dim, self.r_dim)
+        self.attender = get_attender(attention, self.r_dim, is_normalize=True)
+
+        self.reset_parameters()
 
     def deterministic_path(self, X_cntxt, Y_cntxt, X_trgt):
         """
@@ -350,16 +309,15 @@ class AttentiveNeuralProcess(NeuralProcess):
         to give a target specific representation (e.g. attentive neural processes.
         """
         # batch_size, n_cntxt, r_dim
-        R_cntxt = self.encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
-        # batch_size, r_dim
-        r = self.aggregator(R_cntxt, dim=1)
+        keys = self.x_encoder(X_cntxt)
+        values = self.xy_encoder(torch.cat((X_cntxt, Y_cntxt), dim=-1))
 
-        if X_trgt is None:
-            return r
+        # batch_size, n_n_trgt, r_dim
+        queries = self.x_encoder(X_trgt)
 
-        batch_size, n_trgt, _ = X_trgt.shape
-        R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
-        return R
+        # batch_size, n_trgt, value_size
+        R_attn = self.attender(keys, queries, values)
+        return R_attn
 
 
 def make_grid_neural_process(NP):
