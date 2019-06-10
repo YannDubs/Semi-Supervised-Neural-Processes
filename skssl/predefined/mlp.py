@@ -5,7 +5,11 @@ import torch.nn as nn
 from skssl.utils.initialization import linear_init
 from skssl.utils.torchextend import identity
 
-__all__ = ["MLP"]
+__all__ = ["MLP","DeepMLP"]
+
+
+def DeepMLP(*args):
+    return MLP(*args, hidden_size=128, n_hidden_layers=3)
 
 
 class MLP(nn.Module):

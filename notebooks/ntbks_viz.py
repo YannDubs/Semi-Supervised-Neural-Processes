@@ -80,7 +80,8 @@ def plot_posterior_samples(model, X_cntxt, Y_cntxt,
         plt.plot(X, mean_y, alpha=alpha, c='b')
 
         if is_plot_std:
-            plt.fill_between(X, mean_y - std_y, mean_y + std_y, alpha=alpha / 1.5)
+            plt.fill_between(X, mean_y - std_y, mean_y + std_y,
+                             alpha=alpha / 7, color='tab:blue')
         plt.xlim(*min_max)
 
     if true_func is not None:

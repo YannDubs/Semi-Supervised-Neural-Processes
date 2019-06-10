@@ -61,7 +61,9 @@ def linear_init(module, activation="relu"):
         Activation that will be used on the `module`.
     """
     x = module.weight
-    module.bias.data.zero_()
+
+    if module.bias is not None:
+        module.bias.data.zero_()
 
     if activation is None:
         return nn.init.xavier_uniform_(x)

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.kl import kl_divergence
 
-from skssl.predefined import MLP
+from skssl.predefined import MLP, DeepMLP
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
 
@@ -14,10 +14,6 @@ from .attention import get_attender
 
 
 __all__ = ["NeuralProcess", "AttentiveNeuralProcess", "make_grid_neural_process"]
-
-
-def _DeepMLP(*args):
-    return MLP(*args, hidden_size=128, n_hidden_layers=3)
 
 
 class NeuralProcess(nn.Module):
@@ -36,7 +32,7 @@ class NeuralProcess(nn.Module):
     r_dim : int, optional
         Dimension of representation.
 
-    Encoder : nn.Module, optional
+    XYEncoder : nn.Module, optional
         Encoder module which maps {[x_i;y_i]} -> {r_i}. It should be constructed
         via `encoder(n_in, n_out)`.
 
@@ -80,8 +76,8 @@ class NeuralProcess(nn.Module):
     """
 
     def __init__(self, x_dim, y_dim,
-                 XYEncoder=_DeepMLP,
-                 Decoder=_DeepMLP,
+                 XYEncoder=DeepMLP,
+                 Decoder=DeepMLP,
                  r_dim=128,
                  aggregator=torch.mean,
                  LatentEncoder=MLP,
@@ -282,6 +278,10 @@ class AttentiveNeuralProcess(NeuralProcess):
                 "euclidean", "cosine"}, optional
         Type of attention to use. More details in `get_attender`.
 
+    is_normalize : bool, optional
+        Whether qttention weights should sum to 1 (using softmax). If not weights
+        will be in [0,1] but not necessarily sum to 1.
+
     kwargs :
         Additional arguments to `NeuralProcess`.
 
@@ -294,12 +294,14 @@ class AttentiveNeuralProcess(NeuralProcess):
     def __init__(self, x_dim, y_dim,
                  XEncoder=MLP,
                  attention="scaledot",
+                 is_normalize=True,
+                 encoded_path="both",
                  **kwargs):
 
-        super().__init__(x_dim, y_dim, encoded_path="both", **kwargs)
+        super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
         self.x_encoder = XEncoder(self.x_dim, self.r_dim)
-        self.attender = get_attender(attention, self.r_dim, is_normalize=True)
+        self.attender = get_attender(attention, self.r_dim, is_normalize=is_normalize)
 
         self.reset_parameters()
 

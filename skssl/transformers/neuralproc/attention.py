@@ -7,54 +7,139 @@ import torch.nn as nn
 from torch.nn.modules.distance import CosineSimilarity, PairwiseDistance
 
 from skssl.predefined import MLP
-from skssl.utils.initialization import weights_init
+from skssl.utils.initialization import weights_init, linear_init
+from skssl.utils.torchextend import identity
 
 
-def get_attender(scorer, kq_size, is_normalize=True):
+__all__ = ["get_attender", "SelfAttentionEncoder"]
+
+
+def get_attender(attention, kq_size=None, is_normalize=True, **kwargs):
     """
     Set scorer that matches key and query to compute attention along `dim=1`.
 
-    scorer: {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
+    Parameters
+    ----------
+    attention: {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
              "euclidean", "cosine"}, optional
-        The method to compute the alignment. `"scaledot"` [Vaswani et al., 2017]
-        mitigates the high dimensional issue by rescaling the dot product.
-        `"multihead"` is th esame with multiple heads.
-        `"additive"` is the original  attention [Bahdanau et al., 2015].
-        `"multiplicative"` is faster and more space efficient [Luong et al., 2015]
+        The method to compute the alignment. `"scaledot"` mitigates the high
+        dimensional issue of the scaled product by rescaling it [1]. `"multihead"`
+        is the same with multiple heads [1]. `"additive"` is the original attention
+        [2]. `"multiplicative"` is faster and more space efficient [3]
         but performs a little bit worst for high dimensions. `"cosine"` cosine
         similarity. `"manhattan"` `"euclidean"` are the negative distances.
-    """
-    scorer = scorer.lower()
-    if scorer == 'multiplicative':
-        scorer = MultiplicativeAttender(kq_size, is_normalize=is_normalize)
-    elif scorer == 'additive':
-        scorer = AdditiveAttender(kq_size, is_normalize=is_normalize)
-    elif scorer == 'scaledot':
-        scorer = DotAttender(is_scale=True, is_normalize=is_normalize)
-    elif scorer == "cosine":
-        scorer = CosineAttender(is_normalize=is_normalize)
-    elif scorer == "manhattan":
-        scorer = DistanceAttender(p=1, is_normalize=is_normalize)
-    elif scorer == "euclidean":
-        scorer = DistanceAttender(p=2, is_normalize=is_normalize)
-    else:
-        raise ValueError("Unknown attention method {}".format(scorer))
 
-    return scorer
+    kq_size : int, optional
+        Size of the key and query. Only needed for 'multiplicative', 'additive'
+        "multihead".
+
+    is_normalize : bool, optional
+        Whether qttention weights should sum to 1 (using softmax). If not weights
+        will be in [0,1] but not necessarily sum to 1.
+
+    kwargs :
+        Additional arguments to the attender.
+
+    References
+    ----------
+    [1] Vaswani, Ashish, et al. "Attention is all you need." Advances in neural
+        information processing systems. 2017.
+    [2] Bahdanau, Dzmitry, Kyunghyun Cho, and Yoshua Bengio. "Neural machine
+        translation by jointly learning to align and translate." arXiv preprint
+        arXiv:1409.0473 (2014).
+    [3] Luong, Minh-Thang, Hieu Pham, and Christopher D. Manning. "Effective
+        approaches to attention-based neural machine translation." arXiv preprint
+        arXiv:1508.04025 (2015).
+    """
+    attention = attention.lower()
+    if attention == 'multiplicative':
+        attender = MultiplicativeAttender(kq_size, is_normalize=is_normalize, **kwargs)
+    elif attention == 'additive':
+        attender = AdditiveAttender(kq_size, is_normalize=is_normalize, **kwargs)
+    elif attention == 'scaledot':
+        attender = DotAttender(is_scale=True, is_normalize=is_normalize, **kwargs)
+    elif attention == "cosine":
+        attender = CosineAttender(is_normalize=is_normalize, **kwargs)
+    elif attention == "manhattan":
+        attender = DistanceAttender(p=1, is_normalize=is_normalize, **kwargs)
+    elif attention == "euclidean":
+        attender = DistanceAttender(p=2, is_normalize=is_normalize, **kwargs)
+    elif attention == "multihead":
+        attender = MultiheadAttender(kq_size, **kwargs)
+    elif attention == "imagetransformer":
+        attender = ImageTransformerAttender(kq_size, **kwargs)
+    else:
+        raise ValueError("Unknown attention method {}".format(attention))
+
+    return attender
+
+
+class SelfAttentionEncoder(nn.Module):
+    """Self Encoder Layer.
+
+    Parameters
+    ----------
+    inp_dim : int
+        Input dimension.
+
+    inp_dim : int
+        Input dimension.
+
+    PreEncoder : nn.Module, optional
+        Transformation of the inputs before the self attention.
+
+    n_attn_layers : int, optional
+        Number of self attention layers.
+
+    attention : {'multiplicative', "additive", "scaledot", "multihead", "manhattan",
+                "euclidean", "cosine"}, optional
+        Type of attention to use. More details in `get_attender`.
+
+    is_normalize : bool, optional
+        Whether qttention weights should sum to 1 (using softmax). If not weights
+        will be in [0,1] but not necessarily sum to 1.
+    """
+
+    def __init__(self, inp_dim, out_dim,
+                 PreEncoder=MLP,
+                 n_attn_layers=2,
+                 attention="scaledot",
+                 is_normalize=True):
+        super().__init__()
+        self.inp_dim = inp_dim
+        self.out_dim = out_dim
+        self.pre_encoder = PreEncoder(inp_dim, out_dim)
+        self.attn_layers = nn.ModuleList([get_attender(attention, self.out_dim,
+                                                       is_normalize=is_normalize)
+                                          for _ in range(n_attn_layers)])
+
+    def forward(self, inputs):
+        out = self.pre_encoder(inputs)
+
+        for attn_layer in self.attn_layers:
+            out = attn_layer(out, out, out)
+
+        return out
 
 
 class BaseAttender(abc.ABC, nn.Module):
     """
     Base Attender module.
 
-    is_normalize: bool, optional
+    Parameters
+    ----------
+    is_normalize : bool, optional
         Whether weights should sum to 1 (using softmax). If not weights will be
         in [0,1] but not necessarily sum to 1.
+
+    dropout : float, optional
+        Dropout rate to apply to the attention.
     """
 
-    def __init__(self, is_normalize=True):
+    def __init__(self, is_normalize=True, dropout=0):
         super().__init__()
         self.is_normalize = is_normalize
+        self.dropout = (nn.Dropout(p=dropout) if dropout > 0 else identity)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -66,23 +151,25 @@ class BaseAttender(abc.ABC, nn.Module):
 
         Parameters
         ----------
-        keys: torch.Tensor, size=[batch_size, n_keys, kq_size]
-        queries: torch.Tensor, size=[batch_size, n_queries, kq_size]
-        values: torch.Tensor, size=[batch_size, n_keys, value_size]
+        keys : torch.Tensor, size=[batch_size, n_keys, kq_size]
+        queries : torch.Tensor, size=[batch_size, n_queries, kq_size]
+        values : torch.Tensor, size=[batch_size, n_keys, value_size]
 
         Return
         ------
-        glimpse: torch.Tensor, size=[batch_size, n_queries, value_size]
+        context : torch.Tensor, size=[batch_size, n_queries, value_size]
         """
         logits = self.score(keys, queries, **kwargs)
 
         attn = self.logits_to_attn(logits)
 
+        attn = self.dropout(attn)
+
         # attn : size=[batch_size, n_queries, n_keys]
         # values : size=[batch_size, n_keys, value_size]
-        glimpse = torch.bmm(attn, values)
+        context = torch.bmm(attn, values)
 
-        return glimpse
+        return context
 
     def logits_to_attn(self, logits):
         """Convert logits to attention."""
@@ -136,10 +223,6 @@ class MultiplicativeAttender(BaseAttender):
     """
     Multiplicative attention mechanism [1].
 
-    Notes
-    -----
-    - Only difference with paper is that adds bias.
-
     Parameters
     ----------
     kq_size: int
@@ -157,8 +240,10 @@ class MultiplicativeAttender(BaseAttender):
 
     def __init__(self, kq_size, **kwargs):
         super().__init__(**kwargs)
-        self.linear = nn.Linear(kq_size, kq_size)
+
+        self.linear = nn.Linear(kq_size, kq_size, bias=False)
         self.dot = DotAttender(is_scale=False)
+        self.reset_parameters()
 
     def score(self, keys, queries):
         transformed_queries = self.linear(queries)
@@ -187,7 +272,9 @@ class AdditiveAttender(BaseAttender):
 
     def __init__(self, kq_size, **kwargs):
         super().__init__(**kwargs)
+
         self.mlp = MLP(kq_size * 2, 1, hidden_size=kq_size, activation=nn.Tanh)
+        self.reset_parameters()
 
     def score(self, keys, queries):
         batch_size, n_queries, kq_size = queries.shape
@@ -266,3 +353,147 @@ class DistanceAttender(BaseAttender):
             # https://github.com/deepmind/neural-processes/blob/master/attentive_neural_process.ipynb
             attn = logits.tanh() + 1
         return attn
+
+
+class MultiheadAttender(nn.Module):
+    """
+    Multihead attention mechanism [1].
+
+    Parameters
+    ----------
+    kq_size: int
+        Size of key and query.
+
+    n_heads : int, optional
+        Number of heads
+
+    is_post_process : bool, optional
+        Whether to pos process the outout with a linear layer.
+
+    dropout : float, optional
+        Dropout rate to apply to the attention.
+
+    References
+    ----------
+    [1] Vaswani, Ashish, et al. "Attention is all you need." Advances in neural
+        information processing systems. 2017.
+    """
+
+    def __init__(self, kqv_size, n_heads=8, is_post_process=True, dropout=0):
+        super().__init__()
+        self.key_transform = nn.Linear(kqv_size, kqv_size, bias=False)
+        self.query_transform = nn.Linear(kqv_size, kqv_size, bias=False)
+        self.value_transform = nn.Linear(kqv_size, kqv_size, bias=False)
+        self.dot = DotAttender(is_scale=True, dropout=dropout)
+        self.n_heads = n_heads
+        self.head_size = kqv_size // self.n_heads
+        self.post_processor = nn.Linear(kqv_size, kqv_size) if is_post_process else None
+
+        assert kqv_size % n_heads == 0
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        weights_init(self)
+
+        # change initialization because no activation
+        linear_init(self.key_transform, activation="linear")
+        linear_init(self.query_transform, activation="linear")
+        linear_init(self.value_transform, activation="linear")
+
+    def forward(self, keys, queries, values, **kwargs):
+        """
+        Compute the attention between given key and queries.
+
+        Parameters
+        ----------
+        keys: torch.Tensor, size=[batch_size, n_keys, kqv_size]
+        queries: torch.Tensor, size=[batch_size, n_queries, kqv_size]
+        values: torch.Tensor, size=[batch_size, n_keys, kqv_size]
+
+        Return
+        ------
+        context : torch.Tensor, size=[batch_size, n_queries, kqv_size]
+        """
+        keys = self.key_transform(keys)
+        queries = self.query_transform(queries)
+        values = self.value_transform(values)
+
+        # Make multihead. Size = [batch_size * n_heads, {n_keys, n_queries}, head_size]
+        keys = self._make_multiheaded(keys)
+        values = self._make_multiheaded(values)
+        queries = self._make_multiheaded(queries)
+
+        # [batch_size * n_heads, n_queries, head_size]
+        context = self.dot(keys, queries, values)
+
+        context = self._concatenate_multiheads(context)
+
+        if self.post_processor is not None:
+            context = self.post_processor(context)
+
+        return context
+
+    def _make_multiheaded(self, kvq):
+        """Make a key, value, query multiheaded by stacking the heads as new batches."""
+        batch_size = kvq.size(0)
+        kvq = kvq.view(batch_size, -1, self.n_heads, self.head_size)
+        kvq = kvq.permute(2, 0, 1, 3).contiguous().view(batch_size * self.n_heads,
+                                                        -1,
+                                                        self.head_size)
+        return kvq
+
+    def _concatenate_multiheads(self, kvq):
+        """Reverts `_make_multiheaded` by concatenating the heads."""
+        batch_size = kvq.size(0) // self.n_heads
+        kvq = kvq.view(self.n_heads, batch_size, -1, self.head_size)
+        kvq = kvq.permute(1, 2, 0, 3).contiguous().view(batch_size,
+                                                        -1,
+                                                        self.n_heads * self.head_size)
+        return kvq
+
+
+class ImageTransformerAttender(MultiheadAttender):
+    """
+    Image Transformer attention mechanism [1].
+
+    Parameters
+    ----------
+    kq_size: int
+        Size of key and query.
+
+    kwargs:
+        Additional arguments to `MultiheadAttender`.
+
+    References
+    ----------
+    [1] Parmar, Niki, et al. "Image transformer." arXiv preprint arXiv:1802.05751
+        (2018).
+    """
+
+    def __init__(self, kqv_size, **kwargs):
+        super().__init__(kqv_size, is_post_process=False, **kwargs)
+        self.layer_norm = nn.LayerNorm(kqv_size)
+        self.mlp = MLP(kqv_size, kqv_size)
+
+        self.reset_parameters()
+
+    def forward(self, keys, queries, values, **kwargs):
+        """
+        Compute the attention between given key and queries.
+
+        Parameters
+        ----------
+        keys: torch.Tensor, size=[batch_size, n_keys, kqv_size]
+        queries: torch.Tensor, size=[batch_size, n_queries, kqv_size]
+        values: torch.Tensor, size=[batch_size, n_keys, kqv_size]
+
+        Return
+        ------
+        context : torch.Tensor, size=[batch_size, n_queries, kqv_size]
+        """
+        context = super().forward(keys, queries, values)
+        # residual connection + layer norm
+        context = self.layer_norm(context + queries)
+        context = self.layer_norm(context + self.dropout(self.mlp(context)))
+
+        return context
