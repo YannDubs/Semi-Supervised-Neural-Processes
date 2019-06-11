@@ -146,3 +146,25 @@ class SineDataset(Dataset):
 
     def __len__(self):
         return self.num_samples
+
+
+m
+datatasets = dict()
+kwargs = dict(num_samples=num_samples, num_points=num_points)
+datatasets["rbf"] = GPDataset(kernel=1.0 * RBF(length_scale=1.0,
+                                               length_scale_bounds=(1e-1, 10.0)),
+                              **kwargs)
+
+datatasets["periodic"] = GPDataset(kernel=1.0 * ExpSineSquared(length_scale=1.0,
+                                                               periodicity=3.0,
+                                                               length_scale_bounds=(0.1, 10.0),
+                                                               periodicity_bounds=(1.0, 10.0)),
+                                   **kwargs)
+datatasets["non-stationary"] = GPDataset(kernel=(ConstantKernel(0.1, (0.01, 10.0)) *
+                                                 (DotProduct(sigma_0=1.0,
+                                                             sigma_0_bounds=(0.1, 10.0)) ** 2)),
+                                         **kwargs)
+datatasets["matern"] = GPDataset(kernel=1.0 * Matern(length_scale=1.0,
+                                                     length_scale_bounds=(1e-1, 10.0),
+                                                     nu=1.5),
+                                 **kwargs)

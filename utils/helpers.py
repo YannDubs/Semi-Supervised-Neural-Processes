@@ -1,6 +1,22 @@
 import argparse
 
 
+def count_layer(module, layer):
+    """Count number of times a layer is in a network."""
+    i = 0
+    if isinstance(module, layer):
+        return 1
+    else:
+        for m in module.children():
+            i += count_layer(m, layer)
+    return i
+
+
+def count_parameters(model):
+    """Count the number of parameters in a model."""
+    return sum([p.numel() for p in model.parameters()])
+
+
 def set_attributes(obj, **attributes):
     """Add attributes to a n object."""
     for k, v in attributes.items():

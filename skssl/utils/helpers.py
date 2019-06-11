@@ -91,17 +91,6 @@ def check_import(module, to_use=None):
             raise ImportError(error)
 
 
-def count_layer(module, layer):
-    """Count number of times a layer is in a network."""
-    i = 0
-    if isinstance(module, layer):
-        return 1
-    else:
-        for m in module.children():
-            i += count_layer(m, layer)
-    return i
-
-
 class HyperparameterInterpolator:
     """Helper class to compute the value of a hyperparameter at each training step.
 

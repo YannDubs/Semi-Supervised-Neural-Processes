@@ -34,26 +34,33 @@ class NeuralProcess(nn.Module):
 
     XEncoder : nn.Module, optional
         Spatial encoder module which maps {x_i} -> x_transf_i. It should be
-        constructable via `xencoder(x_dim, x_transf_dim)`. Use `MLP` to learn
-        positional encodings and `SinusoidalEncodings` to use sinusoidal positional
-        encodings.
+        constructable via `xencoder(x_dim, x_transf_dim)`. Example:
+            - `MLP` : will learn positional embeddings with MLP
+            - `SinusoidalEncodings` : use sinusoidal positional encodings.
 
     XYEncoder : nn.Module, optional
         Encoder module which maps {x_transf_i, y_i} -> {r_i}. It should be constructable
         via `xyencoder(x_transf_dim, y_dim, n_out)`. If you have an encoder that maps
-        xy -> r you can convert it via `add_flat_input(Encoder)`. E.g.
-        `add_flat_input(MLP)` or `SelfAttentionBlock`.
+        xy -> r you can convert it via `add_flat_input(Encoder)`. Example:
+            - `add_flat_input(MLP)` : learn representation with MLP (`add_flat_input`
+            changes the constructor generaltity / compatibility)
+            - `SelfAttentionBlock` : self attention mechanisms as [4]. For more parameters
+            (attention type, number of layers ...) refer to its docstrings.
 
     Decoder : nn.Module, optional
         Decoder module which maps {r, x_t} -> {y_hat_t}. It should be constructable
-        via `decoder(r_dim, n_out)`. If you have an decoder that maps
-        rx -> y you can convert it via `add_flat_input(Decoder)`. E.g.
-        `add_flat_input(MLP)` or `SelfAttentionBlock`.
+        via `decoder(r_dim, x, n_out)`. If you have an decoder that maps
+        rx -> y you can convert it via `add_flat_input(Decoder)`. Example:
+            - `add_flat_input(MLP)` : predict with MLP.
+            - `SelfAttentionBlock` : predict with self attention mechanisms to
+            have coherant predictions (not use in attentive neural process [4] but
+            in image transformer [5]).
 
     aggregator : callable, optional
         Agregreator function which maps {r_i} -> r. It should have a an argument
         `dim` to say specify the dimensions of aggregation. The dimension should
-        not be kept (i.e. keepdim=False).
+        not be kept (i.e. keepdim=False). To use a cross attention aggregation,
+        use `AttentiveNeuralProcess` instead of `NeuralProcess`.
 
     LatentEncoder : nn.Module, optional
         Encoder which maps r -> z_suff_stat. It should be constructed via
@@ -66,11 +73,13 @@ class NeuralProcess(nn.Module):
         Note: context points should be a subset of target ones.
 
     encoded_path : {"deterministic", "latent", "both"}
-        Which path(s) to use. If `"deterministic"` uses a Conditional Neural
-        Process [2] (no latents), where the decoder gets a deterministic representation
-        as input (function of the context). If `"latent"` uses the original a
-        Neural Process [1], where the decoder gets a sample latent representation
-        as input (function of the target during training and context during test).
+        Which path(s) to use:
+        - `"deterministic"` uses a Conditional Neural Process [2] (no latents),
+        where the decoder gets a deterministic representation as input
+        (function of the context).
+        - `"latent"` uses the original Neural Process [1], where the decoder gets
+        a sample latent representation as input (function of the target during
+        training and context during test).
         If `"both"` concatenates both representations as described in [4].
 
     References
@@ -83,6 +92,8 @@ class NeuralProcess(nn.Module):
         NeurIPS workshop on Bayesian Deep Learning. 2018.
     [4] Kim, Hyunjik, et al. "Attentive neural processes." arXiv preprint
         arXiv:1901.05761 (2019).
+    [5] Parmar, Niki, et al. "Image transformer." arXiv preprint arXiv:1802.05751
+        (2018).
     """
 
     def __init__(self, x_dim, y_dim,
