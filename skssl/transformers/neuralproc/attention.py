@@ -450,6 +450,6 @@ class TransformerAttender(MultiheadAttender):
         context = super().forward(keys, queries, values)
         # residual connection + layer norm
         context = self.layer_norm1(context + queries)
-        context = self.layer_norm2(context + self.dropout(self.mlp(context)))
+        context = self.layer_norm2(context + self.dot.dropout(self.mlp(context)))
 
         return context
