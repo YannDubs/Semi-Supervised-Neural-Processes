@@ -50,7 +50,7 @@ class SelfAttentionBlock(nn.Module):
         if self.is_reshape_y:
             self.reshape_y = MLP(self.y_dim, self.x_dim)
 
-        self.attn_layers = nn.ModuleList([get_attender(attention, self.out_dim,
+        self.attn_layers = nn.ModuleList([get_attender(attention, self.x_dim,
                                                        is_normalize=is_normalize,
                                                        **kwargs)
                                           for _ in range(n_attn_layers)])
