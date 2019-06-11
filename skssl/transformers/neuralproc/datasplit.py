@@ -4,7 +4,7 @@ import functools
 import torch
 import numpy as np
 
-from skssl.utils.helpers import ratio_to_int
+from skssl.utils.helpers import ratio_to_int, prod
 
 
 def random_masker(batch_size, mask_shape,

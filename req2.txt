@@ -1,0 +1,6 @@
+skorch
+matplotlib
+tqdm
+scikit-learn
+joblib
+-e git://github.com/YannDubs/scikit-optimize.git#egg=scikit-optimize
