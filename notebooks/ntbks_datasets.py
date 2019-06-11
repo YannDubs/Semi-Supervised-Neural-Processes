@@ -25,10 +25,10 @@ class GPDataset(Dataset):
         The kernel specifying the covariance function of the GP. If None is
         passed, the kernel "1.0 * RBF(1.0)" is used as default.
 
-    num_samples : int, optional
+    n_samples : int, optional
         Number of sampled functios contained in dataset.
 
-    num_points : int, optional
+    n_points : int, optional
         Number of points at which to evaluate f(x) for x in min_max.
 
     min_max : tuple of floats, optional
@@ -38,45 +38,71 @@ class GPDataset(Dataset):
     def __init__(self,
                  kernel=1. * RBF(length_scale=1.),
                  min_max=(-5, 5),
-                 num_samples=1000,
-                 num_points=100):
+                 n_samples=1000,
+                 n_points=100):
 
-        self.num_samples = num_samples
-        self.num_points = num_points
+        self.n_samples = n_samples
+        self.n_points = n_points
         self.min_max = min_max
         self.gp = GaussianProcessRegressor(kernel=kernel)
+        self.data, self.targets = self.precompute_data()
 
-        self.data = torch.from_numpy(np.linspace(*self.min_max, num_points))
-        self.data = self.data.view(1, -1, 1)
-        self.data = self.data.expand(self.num_samples, self.num_points, 1).float()
-
-        # rescale features to [-1,1]
-        self.data = rescale_range(self.data, self.min_max, (-1, 1))
-
-        self.precompute_data()
-
-    def precompute_data(self):
-        self.counter = 0
-        X_ = np.linspace(*self.min_max, self.num_points)  # could take the one from self.data
-        y_samples = self.gp.sample_y(X_[:, np.newaxis], self.num_samples).transpose(1, 0)
-        y_samples = torch.from_numpy(y_samples)
-        self.targets = y_samples.view(self.num_samples, self.num_points, 1).float()
+    def __len__(self):
+        return self.n_samples
 
     def __getitem__(self, index):
         # doesn't use index because randomly gnerated in any case => sample
         # in order which enables to know when epoch is finished and regenerate
         # new functions
         self.counter += 1
-        if self.counter == self.num_samples:
-            self.precompute_data()
+        if self.counter == self.n_samples:
+            self.data, self.targets = self.precompute_data()
         return self.data[self.counter], self.targets[self.counter]
 
-    def extrapolation_batch(self, ):
-        """Return a batch of extrapolation"""
-        pass
+    def precompute_data(self, min_max=None, n_samples=None, ):
+        self.counter = 0
+        return self._precompute_helper(self.min_max, self.n_samples, self.n_points)
 
-    def __len__(self):
-        return self.num_samples
+    def _precompute_helper(self, min_max, n_samples, n_points):
+        # sample from a grid
+        X = np.linspace(*min_max, n_points)
+        # add noise (with standard deviation of "stepsize") to not be on a grid
+        X += np.random.randn(*X.shape) * (min_max[1] - min_max[0]) / n_points
+        # make sure that still in bound
+        X = X.clip(min=min_max[0], max=min_max[1])
+        # sort which is convenient for plotting
+        X.sort()
+
+        targets = self.gp.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
+        targets = torch.from_numpy(targets)
+        targets = targets.view(n_samples, n_points, 1).float()
+
+        X = torch.from_numpy(X)
+        X = X.view(1, -1, 1).expand(n_samples, n_points, 1).float()
+        # rescale features to [-1,1]
+        # uses `self.min_max` like that possible to precompute extrapolation data
+        X = rescale_range(X, self.min_max, (-1, 1))
+
+        return X, targets
+
+    def extrapolation_samples(self, n_samples=1, right_extrap_distance=5, n_points=None):
+        """Return a batch of extrapolation
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            Number of sampled function (i.e. batch size).
+
+        right_extrap_distance : float, optional
+            How much fursther on the right to extrapolate.
+
+        n_points : int, optional
+            Number of points at which to evaluate f(x) for x in min_max. If None
+            uses `self.n_points`.
+        """
+        min_max = (self.min_max[0], self.min_max[1] + right_extrap_distance)
+        n_points = n_points if n_points is not None else self.n_points
+        return self._precompute_helper(min_max, n_samples, n_points)
 
 
 class SineDataset(Dataset):
@@ -98,10 +124,10 @@ class SineDataset(Dataset):
         Defines the range from which the shift (i.e. b) of the sine function is
         sampled.
 
-    num_samples : int, optional
+    n_samples : int, optional
         Number of sampled functios contained in dataset.
 
-    num_points : int, optional
+    n_points : int, optional
         Number of points at which to evaluate f(x) for x in min_max.
 
     std_noise : float, optional
@@ -114,15 +140,15 @@ class SineDataset(Dataset):
     def __init__(self,
                  amplitude_range=(-1., 1.),
                  shift_range=(-.5, .5),
-                 num_samples=1000,
-                 num_points=100,
+                 n_samples=1000,
+                 n_points=100,
                  std_noise=0.01,
                  min_max=(-math.pi, math.pi)):
 
         self.amplitude_range = amplitude_range
         self.shift_range = shift_range
-        self.num_samples = num_samples
-        self.num_points = num_points
+        self.n_samples = n_samples
+        self.n_points = n_points
         self.x_dim = 1  # x and y dim are fixed for this dataset.
         self.y_dim = 1
         self.std_noise = std_noise
@@ -132,13 +158,13 @@ class SineDataset(Dataset):
         a_min, a_max = amplitude_range
         b_min, b_max = shift_range
         # Sample random amplitude
-        a = (a_max - a_min) * torch.rand(num_samples, 1, self.y_dim) + a_min
+        a = (a_max - a_min) * torch.rand(n_samples, 1, self.y_dim) + a_min
         # Sample random shift
-        b = (b_max - b_min) * torch.rand(num_samples, 1, self.y_dim) + b_min
-        # Shape (num_samples, num_points, x_dim)
-        self.data = torch.linspace(*self.min_max, num_points)
-        self.data = self.data.view(1, -1, 1).expand(self.num_samples, self.num_points, self.x_dim)
-        # Shape (num_samples, num_points, y_dim)
+        b = (b_max - b_min) * torch.rand(n_samples, 1, self.y_dim) + b_min
+        # Shape (n_samples, n_points, x_dim)
+        self.data = torch.linspace(*self.min_max, n_points)
+        self.data = self.data.view(1, -1, 1).expand(self.n_samples, self.n_points, self.x_dim)
+        # Shape (n_samples, n_points, y_dim)
         self.targets = (a * torch.sin(self.data - b)
                         ) + torch.randn_like(self.data) * self.std_noise
 
@@ -149,4 +175,4 @@ class SineDataset(Dataset):
         return self.data[index], self.targets[index]
 
     def __len__(self):
-        return self.num_samples
+        return self.n_samples
