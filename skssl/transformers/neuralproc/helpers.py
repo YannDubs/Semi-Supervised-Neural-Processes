@@ -39,7 +39,8 @@ class SelfAttentionBlock(nn.Module):
     def __init__(self, x_dim, y_dim, out_dim,
                  n_attn_layers=2,
                  attention="scaledot",
-                 is_normalize=True):
+                 is_normalize=True,
+                 **kwargs):
         super().__init__()
         self.x_dim = x_dim
         self.y_dim = y_dim
@@ -50,7 +51,8 @@ class SelfAttentionBlock(nn.Module):
             self.reshape_y = MLP(self.y_dim, self.x_dim)
 
         self.attn_layers = nn.ModuleList([get_attender(attention, self.out_dim,
-                                                       is_normalize=is_normalize)
+                                                       is_normalize=is_normalize,
+                                                       **kwargs)
                                           for _ in range(n_attn_layers)])
 
         self.is_reshape_out = self.x_dim != self.out_dim
