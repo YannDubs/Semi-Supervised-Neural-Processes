@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.kl import kl_divergence
+from torch.distributions.independent import Independent
+from torch.distributions import Normal
 
 from skssl.predefined import MLP, DeepMLP, add_flat_input
 from skssl.utils.initialization import weights_init
@@ -82,6 +84,13 @@ class NeuralProcess(nn.Module):
         training and context during test).
         If `"both"` concatenates both representations as described in [4].
 
+    PredictiveDistribution : torch.distributions.Distribution, optional
+        Predictive distribution. The predicted outputs will be independent and thus
+        wrapped around `Independent` (e.g. diagonal covariance for a Gaussian).
+        The input to the constructor are currently a value in ]-inf, inf[ and one
+        in [0.1, inf[ (typically `loc` and `scale`), although it is very easy to make
+        more general if needs be.
+
     References
     ----------
     [1] Garnelo, Marta, et al. "Neural processes." arXiv preprint
@@ -104,13 +113,15 @@ class NeuralProcess(nn.Module):
                  aggregator=torch.mean,
                  LatentEncoder=MLP,
                  get_cntxt_trgt=context_target_split,
-                 encoded_path="deterministic"):
+                 encoded_path="deterministic",
+                 PredictiveDistribution=Normal):
         super().__init__()
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.r_dim = r_dim
         self.encoded_path = encoded_path.lower()
         self.is_transform = False
+        self.PredictiveDistribution = PredictiveDistribution
 
         self.x_encoder = XEncoder(self.x_dim, self.r_dim)
         self.xy_encoder = XYEncoder(self.r_dim, self.y_dim, self.r_dim)
@@ -275,10 +286,10 @@ class NeuralProcess(nn.Module):
         # batch_size, n_trgt, y_dim*2
         X_transf = self.x_encoder(X_trgt)
         suff_stat_Y_trgt = self.decoder(dec_inp, X_transf)
-        mean_trgt, std_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
+        loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
-        std_trgt = 0.1 + 0.9 * F.softplus(std_trgt)
-        p_y = MultivariateNormalDiag(mean_trgt, std_trgt)
+        scale_trgt = 0.1 + 0.9 * F.softplus(scale_trgt)
+        p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
         return p_y
 
 
