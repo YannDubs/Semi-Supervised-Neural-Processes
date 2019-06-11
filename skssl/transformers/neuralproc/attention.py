@@ -429,7 +429,7 @@ class TransformerAttender(MultiheadAttender):
         super().__init__(kqv_size, is_post_process=False, **kwargs)
         self.layer_norm1 = nn.LayerNorm(kqv_size)
         self.layer_norm2 = nn.LayerNorm(kqv_size)
-        self.mlp = MLP(kqv_size, kqv_size, hidden_size=kqv_size, activation=nn.ReLu)
+        self.mlp = MLP(kqv_size, kqv_size, hidden_size=kqv_size, activation=nn.ReLU)
 
         self.reset_parameters()
 

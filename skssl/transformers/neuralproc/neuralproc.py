@@ -193,7 +193,7 @@ class NeuralProcess(nn.Module):
         if self.encoded_path in ["deterministic", "both"]:
             R_det = self.deterministic_path(X_cntxt, Y_cntxt, X_trgt)
 
-        dec_inp = self.make_dec_inp(R_det, z_sample)
+        dec_inp = self.make_dec_inp(R_det, z_sample, X_trgt)
         p_y_trgt = self.decode(dec_inp, X_trgt)
 
         return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt
@@ -235,9 +235,9 @@ class NeuralProcess(nn.Module):
         R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
         return R
 
-    def make_dec_inp(self, R, z_sample):
+    def make_dec_inp(self, R, z_sample, X_trgt):
         """Make the context input for the decoder."""
-        batch_size, n_trgt, _ = R.shape
+        batch_size, n_trgt, _ = X_trgt.shape
 
         if self.encoded_path == "both":
             Z = z_sample.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
