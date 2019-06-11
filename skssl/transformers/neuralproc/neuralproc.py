@@ -42,11 +42,13 @@ class NeuralProcess(nn.Module):
         Encoder module which maps {x_transf_i, y_i} -> {r_i}. It should be constructable
         via `xyencoder(x_transf_dim, y_dim, n_out)`. If you have an encoder that maps
         xy -> r you can convert it via `add_flat_input(Encoder)`. E.g.
-        `add_flat_input(MLP)` or `SelfAttentionEncoder`.
+        `add_flat_input(MLP)` or `SelfAttentionBlock`.
 
     Decoder : nn.Module, optional
-        Decoder module which maps {[r;x_t]} -> {y_hat_t}. It should be constructed via
-        `decoder(n_in, n_out)`.
+        Decoder module which maps {r, x_t} -> {y_hat_t}. It should be constructable
+        via `decoder(r_dim, n_out)`. If you have an decoder that maps
+        rx -> y you can convert it via `add_flat_input(Decoder)`. E.g.
+        `add_flat_input(MLP)` or `SelfAttentionBlock`.
 
     aggregator : callable, optional
         Agregreator function which maps {r_i} -> r. It should have a an argument
@@ -86,7 +88,7 @@ class NeuralProcess(nn.Module):
     def __init__(self, x_dim, y_dim,
                  XEncoder=MLP,
                  XYEncoder=add_flat_input(DeepMLP),
-                 Decoder=DeepMLP,
+                 Decoder=add_flat_input(DeepMLP),
                  r_dim=128,
                  aggregator=torch.mean,
                  LatentEncoder=MLP,
@@ -99,15 +101,15 @@ class NeuralProcess(nn.Module):
         self.encoded_path = encoded_path.lower()
         self.is_transform = False
 
-        rz_dim = self.r_dim * 2 if self.encoded_path == "both" else self.r_dim
-
         self.x_encoder = XEncoder(self.x_dim, self.r_dim)
         self.xy_encoder = XYEncoder(self.r_dim, self.y_dim, self.r_dim)
         self.aggregator = aggregator
-        self.decoder = Decoder(rz_dim + self.x_dim, self.y_dim * 2)  # *2 because mean and var
+        self.decoder = Decoder(self.r_dim, self.r_dim, self.y_dim * 2)  # *2 because mean and var
 
         if self.encoded_path in ["latent", "both"]:
             self.lat_encoder = LatentEncoder(self.r_dim, self.r_dim * 2)
+            if self.encoded_path == "both":
+                self.merge_rz = nn.Linear(self.r_dim * 2, self.r_dim)
         elif self.encoded_path == "deterministic":
             self.lat_encoder = None
         else:
@@ -191,8 +193,8 @@ class NeuralProcess(nn.Module):
         if self.encoded_path in ["deterministic", "both"]:
             R_det = self.deterministic_path(X_cntxt, Y_cntxt, X_trgt)
 
-        dec_inp = self.make_dec_inp(R_det, z_sample, X_trgt)
-        p_y_trgt = self.decode(dec_inp)
+        dec_inp = self.make_dec_inp(R_det, z_sample)
+        p_y_trgt = self.decode(dec_inp, X_trgt)
 
         return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt
 
@@ -233,25 +235,22 @@ class NeuralProcess(nn.Module):
         R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
         return R
 
-    def make_dec_inp(self, R, z_sample, X_trgt):
-        """
-        Make the input for the decoder. deterministic: [R;X], latent: [Z;X],
-        both: [R;Z;X].
-        """
-        batch_size, n_trgt, _ = X_trgt.shape
+    def make_dec_inp(self, R, z_sample):
+        """Make the context input for the decoder."""
+        batch_size, n_trgt, _ = R.shape
 
-        dec_inp = X_trgt
-
-        if self.encoded_path in ["both", "latent"]:
+        if self.encoded_path == "both":
             Z = z_sample.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
-            dec_inp = torch.cat((Z, dec_inp), dim=-1)
-
-        if self.encoded_path in ["both", "deterministic"]:
-            dec_inp = torch.cat((R, dec_inp), dim=-1)
+            dec_inp = torch.relu(self.merge_rz(torch.cat((R, Z), dim=-1)))
+        elif self.encoded_path == "latent":
+            Z = z_sample.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
+            dec_inp = Z
+        elif self.encoded_path == "deterministic":
+            dec_inp = R
 
         return dec_inp
 
-    def decode(self, dec_inp):
+    def decode(self, dec_inp, X_trgt):
         """
         Compute predicted distribution conditioned on representation and
         target positions.
@@ -263,7 +262,8 @@ class NeuralProcess(nn.Module):
             `encoded_path == "both"` else `r_dim + x_dim`.
         """
         # batch_size, n_trgt, y_dim*2
-        suff_stat_Y_trgt = self.decoder(dec_inp)
+        X_transf = self.x_encoder(X_trgt)
+        suff_stat_Y_trgt = self.decoder(dec_inp, X_transf)
         mean_trgt, std_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
         std_trgt = 0.1 + 0.9 * F.softplus(std_trgt)

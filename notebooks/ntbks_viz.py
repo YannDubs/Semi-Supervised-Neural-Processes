@@ -46,8 +46,8 @@ def plot_prior_samples(model, r_dim,
     for i in range(n_samples):
         z_sample = torch.randn((1, r_dim))
         r = z_sample.unsqueeze(1).expand(1, n_trgt, r_dim)
-        dec_input = model.make_dec_inp(r, z_sample, X_target)
-        p_y = model.decode(dec_input)
+        dec_input = model.make_dec_inp(r, z_sample)
+        p_y = model.decode(dec_input, X_target)
 
         mean_y = p_y.base_dist.loc.detach().numpy()[0].flatten()
         std_y = p_y.base_dist.scale.detach().numpy()[0].flatten()

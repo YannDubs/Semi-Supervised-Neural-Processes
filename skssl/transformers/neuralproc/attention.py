@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.nn.modules.distance import CosineSimilarity, PairwiseDistance
 
 from skssl.predefined import MLP
-from skssl.utils.initialization import weights_init, linear_init
+from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import identity
 
 
@@ -332,12 +332,14 @@ class MultiheadAttender(nn.Module):
 
     def __init__(self, kqv_size, n_heads=8, is_post_process=True, dropout=0):
         super().__init__()
+        # only 3 transforms for scalability but actually as if using n_heads * 3 layers
         self.key_transform = nn.Linear(kqv_size, kqv_size, bias=False)
         self.query_transform = nn.Linear(kqv_size, kqv_size, bias=False)
         self.value_transform = nn.Linear(kqv_size, kqv_size, bias=False)
         self.dot = DotAttender(is_scale=True, dropout=dropout)
         self.n_heads = n_heads
         self.head_size = kqv_size // self.n_heads
+        self.kqv_size = kqv_size
         self.post_processor = nn.Linear(kqv_size, kqv_size) if is_post_process else None
 
         assert kqv_size % n_heads == 0
@@ -346,10 +348,12 @@ class MultiheadAttender(nn.Module):
     def reset_parameters(self):
         weights_init(self)
 
-        # change initialization because no activation
-        linear_init(self.key_transform, activation="linear")
-        linear_init(self.query_transform, activation="linear")
-        linear_init(self.value_transform, activation="linear")
+        # change initialization because real output is not kqv_size but head_size
+        # just coded so for convenience and scalability
+        std = math.sqrt(2.0 / (self.kqv_size + self.head_size))
+        nn.init.normal_(self.key_transform.weight, mean=0, std=std)
+        nn.init.normal_(self.query_transform.weight, mean=0, std=std)
+        nn.init.normal_(self.value_transform.weight, mean=0, std=std)
 
     def forward(self, keys, queries, values, **kwargs):
         """
@@ -423,8 +427,9 @@ class TransformerAttender(MultiheadAttender):
 
     def __init__(self, kqv_size, **kwargs):
         super().__init__(kqv_size, is_post_process=False, **kwargs)
-        self.layer_norm = nn.LayerNorm(kqv_size)
-        self.mlp = MLP(kqv_size, kqv_size)
+        self.layer_norm1 = nn.LayerNorm(kqv_size)
+        self.layer_norm2 = nn.LayerNorm(kqv_size)
+        self.mlp = MLP(kqv_size, kqv_size, hidden_size=kqv_size, activation=nn.ReLu)
 
         self.reset_parameters()
 
@@ -444,7 +449,7 @@ class TransformerAttender(MultiheadAttender):
         """
         context = super().forward(keys, queries, values)
         # residual connection + layer norm
-        context = self.layer_norm(context + queries)
-        context = self.layer_norm(context + self.dropout(self.mlp(context)))
+        context = self.layer_norm1(context + queries)
+        context = self.layer_norm2(context + self.dropout(self.mlp(context)))
 
         return context
