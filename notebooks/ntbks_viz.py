@@ -179,4 +179,5 @@ def plot_posterior_samples(dataset, model,
                                     is_plot_std=is_plot_std,
                                     train_min_max=dataset.min_max,
                                     test_min_max=test_min_max,
+                                    n_trgt=n_points,
                                     **kwargs)
