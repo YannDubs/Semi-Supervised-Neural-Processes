@@ -38,7 +38,7 @@ class SelfAttentionBlock(nn.Module):
 
     def __init__(self, x_dim, y_dim, out_dim,
                  n_attn_layers=2,
-                 attention="scaledot",
+                 attention="transformer",
                  is_normalize=True,
                  **kwargs):
         super().__init__()
