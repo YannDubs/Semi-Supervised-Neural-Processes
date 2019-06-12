@@ -7,7 +7,7 @@ from torch.distributions.kl import kl_divergence
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
-from skssl.predefined import MLP, DeepMLP, add_flat_input
+from skssl.predefined import MLP, get_uninitialized_mlp, merge_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
 
@@ -43,17 +43,17 @@ class NeuralProcess(nn.Module):
     XYEncoder : nn.Module, optional
         Encoder module which maps {x_transf_i, y_i} -> {r_i}. It should be constructable
         via `xyencoder(x_transf_dim, y_dim, n_out)`. If you have an encoder that maps
-        xy -> r you can convert it via `add_flat_input(Encoder)`. Example:
-            - `add_flat_input(MLP)` : learn representation with MLP (`add_flat_input`
-            changes the constructor generaltity / compatibility)
+        xy -> r you can convert it via `merge_flat_input(Encoder)`. Example:
+            - `merge_flat_input(MLP, is_sum_merge=False)` : learn representation
+            with MLP. `merge_flat_input` concatenates (or sums) X and Y inputs.
             - `SelfAttentionBlock` : self attention mechanisms as [4]. For more parameters
             (attention type, number of layers ...) refer to its docstrings.
 
     Decoder : nn.Module, optional
-        Decoder module which maps {r, x_t} -> {y_hat_t}. It should be constructable
-        via `decoder(r_dim, x, n_out)`. If you have an decoder that maps
-        rx -> y you can convert it via `add_flat_input(Decoder)`. Example:
-            - `add_flat_input(MLP)` : predict with MLP.
+        Decoder module which maps {x_t, r} -> {y_hat_t}. It should be constructable
+        via `decoder(x, r_dim, n_out)`. If you have an decoder that maps
+        rx -> y you can convert it via `merge_flat_input(Decoder)`. Example:
+            - `merge_flat_input(MLP)` : predict with MLP.
             - `SelfAttentionBlock` : predict with self attention mechanisms to
             have coherant predictions (not use in attentive neural process [4] but
             in image transformer [5]).
@@ -107,8 +107,10 @@ class NeuralProcess(nn.Module):
 
     def __init__(self, x_dim, y_dim,
                  XEncoder=MLP,
-                 XYEncoder=add_flat_input(DeepMLP),
-                 Decoder=add_flat_input(DeepMLP),
+                 XYEncoder=merge_flat_input(get_uninitialized_mlp(n_hidden_layers=2),
+                                            is_sum_merge=True),
+                 Decoder=merge_flat_input(get_uninitialized_mlp(n_hidden_layers=4),
+                                          is_sum_merge=True),
                  r_dim=128,
                  aggregator=torch.mean,
                  LatentEncoder=MLP,
@@ -285,7 +287,7 @@ class NeuralProcess(nn.Module):
         """
         # batch_size, n_trgt, y_dim*2
         X_transf = self.x_encoder(X_trgt)
-        suff_stat_Y_trgt = self.decoder(dec_inp, X_transf)
+        suff_stat_Y_trgt = self.decoder(X_transf, dec_inp)
         loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
         scale_trgt = 0.1 + 0.9 * F.softplus(scale_trgt)
@@ -341,7 +343,7 @@ class AttentiveNeuralProcess(NeuralProcess):
         """
         # batch_size, n_cntxt, r_dim
         keys = self.x_encoder(X_cntxt)
-        values = self.xy_encoder(X_cntxt, Y_cntxt)
+        values = self.xy_encoder(keys, Y_cntxt)
 
         if X_trgt is None:
             r = self.aggregator(values, dim=1)
@@ -354,21 +356,6 @@ class AttentiveNeuralProcess(NeuralProcess):
         # batch_size, n_trgt, value_size
         R_attn = self.attender(keys, queries, values)
         return R_attn
-
-    def deterministic_path(self, X_cntxt, Y_cntxt, X_trgt):
-        """
-        Deterministic encoding path. `X_trgt` can be used in child classes
-        to give a target specific representation (e.g. attentive neural processes.
-        """
-        # batch_size, n_cntxt, r_dim
-        X_transf = self.x_encoder(X_cntxt)
-        R_cntxt = self.xy_encoder(X_transf, Y_cntxt)
-        # batch_size, r_dim
-        r = self.aggregator(R_cntxt, dim=1)
-
-        batch_size, n_trgt, _ = X_trgt.shape
-        R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
-        return R
 
 
 def make_grid_neural_process(NP):

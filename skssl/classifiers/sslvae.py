@@ -13,7 +13,7 @@ from sklearn.base import ClassifierMixin, TransformerMixin
 
 from skssl.transformers import VAELoss
 from skssl.predefined import MLP, WideResNet, ReversedWideResNet
-from skssl.predefined.helpers import add_flat_input
+from skssl.predefined.helpers import merge_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import reparameterize
 from skssl.utils.helpers import cont_tuple_to_tuple_cont
@@ -146,7 +146,7 @@ class SSLVAE(nn.Module):
     Encoder: nn.Module, optional
         Encoder module which maps X(_transf), y -> z_suff_stat. It should be callable
         with `encoder(x_shape, y_dim, n_out)`. If you have an encoder that maps
-        x -> z you can convert it via `add_flat_input(Encoder)`.
+        x -> z you can convert it via `merge_flat_input(Encoder)`.
 
     Decoder: nn.Module, optional
         Decoder module which maps [z;y] -> X. It should be callable with
@@ -170,7 +170,7 @@ class SSLVAE(nn.Module):
     def __init__(self, x_shape, y_dim,
                  z_dim=64,
                  transform_dim=None,
-                 Encoder=add_flat_input(MLP),
+                 Encoder=merge_flat_input(MLP),
                  Decoder=ReversedWideResNet,
                  Classifier=MLP,
                  Transformer=WideResNet):

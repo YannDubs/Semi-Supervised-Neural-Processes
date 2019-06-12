@@ -7,7 +7,7 @@ arXiv preprint arXiv:1602.05473 (2016).
 import torch
 
 from skssl.predefined import MLP, WideResNet, ReversedWideResNet
-from skssl.predefined.helpers import add_flat_input
+from skssl.predefined.helpers import merge_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import kl_normal_loss
 from skssl.utils.helpers import HyperparameterInterpolator
@@ -93,7 +93,7 @@ class SSLAuxVAE(SSLVAE):
     Encoder: nn.Module, optional
         Encoder module which maps X(_transf), [a;y] -> z_suff_stat. It should be
         callable with `encoder(x_shape, a_dim+y_dim, n_out)`. If you have an
-        encoder that maps x -> z you can convert it via `add_flat_input(Encoder)`.
+        encoder that maps x -> z you can convert it via `merge_flat_input(Encoder)`.
 
     Decoder: nn.Module, optional
         Decoder module which maps [z;y] -> X. It should be callable with
@@ -103,12 +103,12 @@ class SSLAuxVAE(SSLVAE):
     AuxDecoder: nn.Module, optional
         Decoder module which maps X(_transf), [z;y] -> _suff_stat. It should be
         callable with `aux_decoder(x_shape, z_dim+y_dim, a_dim)`. If you have an
-        Decoder that maps x -> a you can convert it via `add_flat_input(Decoder)`.
+        Decoder that maps x -> a you can convert it via `merge_flat_input(Decoder)`.
 
     Classifier: nn.Module, optional
         Classifier module which maps X(_transf), a -> y. It should be callable with
         `encoder(x_shape, a_dim, n_out)`. If you have an encoder that
-        maps x -> y you can convert it via `add_flat_input(Encoder)`.
+        maps x -> y you can convert it via `merge_flat_input(Encoder)`.
 
     kwargs:
         Additional arguments to `SSLVAE` (e.g. Transformer).
@@ -123,10 +123,10 @@ class SSLAuxVAE(SSLVAE):
                  z_dim=64,
                  a_dim=64,
                  AuxEncoder=MLP,
-                 Encoder=add_flat_input(MLP),
+                 Encoder=merge_flat_input(MLP),
                  Decoder=ReversedWideResNet,
-                 AuxDecoder=add_flat_input(MLP),
-                 Classifier=add_flat_input(MLP),
+                 AuxDecoder=merge_flat_input(MLP),
+                 Classifier=merge_flat_input(MLP),
                  **kwargs):
 
         empty = lambda *args: None
