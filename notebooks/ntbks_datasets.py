@@ -85,7 +85,7 @@ class GPDataset(Dataset):
 
         return X, targets
 
-    def extrapolation_samples(self, n_samples=1, right_extrap_distance=5, n_points=None):
+    def extrapolation_samples(self, n_samples=1, test_min_max=None, n_points=None):
         """Return a batch of extrapolation
 
         Parameters
@@ -93,16 +93,17 @@ class GPDataset(Dataset):
         n_samples : int, optional
             Number of sampled function (i.e. batch size).
 
-        right_extrap_distance : float, optional
-            How much fursther on the right to extrapolate.
+        test_min_max : float, optional
+            Testing range. If `None` uses training one.
 
         n_points : int, optional
             Number of points at which to evaluate f(x) for x in min_max. If None
             uses `self.n_points`.
         """
-        min_max = (self.min_max[0], self.min_max[1] + right_extrap_distance)
+        if test_min_max is None:
+            test_min_max = self.min_max
         n_points = n_points if n_points is not None else self.n_points
-        return self._precompute_helper(min_max, n_samples, n_points)
+        return self._precompute_helper(test_min_max, n_samples, n_points)
 
 
 class SineDataset(Dataset):
