@@ -6,7 +6,7 @@ from skssl.utils.initialization import weights_init
 
 from .attention import get_attender
 
-__all__ = ["SelfAttentionBlock", "SinusoidalEncodings"]
+__all__ = ["SelfAttentionBlock", "SinusoidalEncodings", "FeatureEncodings"]
 
 
 class SelfAttentionBlock(nn.Module):
@@ -133,3 +133,42 @@ class SinusoidalEncodings(nn.Module):
         # and unflatten
         out = out.view(*shape[:-1], self.sub_dim * self.x_dim)
         return out
+
+
+class FeatureEncodings(nn.Module):
+    """WIP"""
+
+    def __init__(self, x_dim, out_dim=8):
+        super().__init__()
+        self.x_dim = x_dim
+        self.n_sin = out_dim // x_dim - 2  # number of sinusoidals
+        # because we add bias it can be sin or cosine
+        self.transform_sin_input = nn.Linear(self.n_sin, self.n_sin)
+        self.p = nn.Parameter(torch.tensor([1.]))
+        self.reset_parameters()
+
+        if out_dim % x_dim != 0:
+            raise ValueError("out_dim={} has to be dividable by x_dim={}.".format(out_dim, x_dim))
+
+    def reset_parameters(self):
+        self.p = nn.Parameter(torch.tensor([1.]))
+        weights_init(self)
+
+    def forward(self, x):
+        shape = x.shape
+        x = x.unsqueeze(-1)
+
+        # sinusoidals
+        sin_input = self.transform_sin_input(x.expand(*shape, self.n_sin))
+        sin_output = torch.sin(sin_input)
+
+        # power (keep sign) : allow extrapolation, although interpolation is always
+        # positive x
+        power_output = x.sign() * torch.pow(torch.abs(x), self.p)
+
+        # x, x**p, sin(ax+b), sin(cx+d) ...
+        x = torch.cat([x, power_output, sin_output], dim=-1)
+
+        # concat previous vector for all dimension of x
+        x = x.view(*shape[:-1], (self.n_sin + 2) * self.x_dim)
+        return x

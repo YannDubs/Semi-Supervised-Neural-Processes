@@ -63,6 +63,9 @@ def get_attender(attention, kq_size=None, is_normalize=True, **kwargs):
         attender = DistanceAttender(p=1, is_normalize=is_normalize, **kwargs)
     elif attention == "euclidean":
         attender = DistanceAttender(p=2, is_normalize=is_normalize, **kwargs)
+    elif attention == "weighted_dist":
+        attender = DistanceAttender(kq_size=kq_size, is_weight=True, p=1,
+                                    is_normalize=is_normalize, **kwargs)
     elif attention == "multihead":
         attender = MultiheadAttender(kq_size, **kwargs)
     elif attention == "transformer":
@@ -80,8 +83,8 @@ class BaseAttender(abc.ABC, nn.Module):
     Parameters
     ----------
     is_normalize : bool, optional
-        Whether weights should sum to 1 (using softmax). If not weights will be
-        in [0,1] but not necessarily sum to 1.
+        Whether weights should sum to 1 (using softmax). If not weights will not
+        be normalized.
 
     dropout : float, optional
         Dropout rate to apply to the attention.
@@ -127,7 +130,7 @@ class BaseAttender(abc.ABC, nn.Module):
         if self.is_normalize:
             attn = logits.softmax(dim=-1)
         else:
-            attn = logits.sigmoid()
+            attn = logits
         return attn
 
     @abc.abstractmethod
@@ -240,7 +243,7 @@ class AdditiveAttender(BaseAttender):
 
 class CosineAttender(BaseAttender):
     """
-    Cosine similarity scorer for attention.
+    Computes the attention as a function of cosine similarity.
     """
 
     def __init__(self, **kwargs):
@@ -260,50 +263,43 @@ class CosineAttender(BaseAttender):
 
 class DistanceAttender(BaseAttender):
     """
-    Generalizes the Laplace (L1) attender from [1].
+    Computes the attention as a function of the negative dimension wise (weighted)
+    distance.
 
     Parameters
     ----------
     p : float, optional
         The exponent value in the norm formulation.
 
-    length_scale : float, optional
-        Float that scales down (divide) the distance.
+    is_weight : float, optional
+        Whether to use a dimension wise weight and bias.
 
     kwargs :
         Additional arguments to `BaseAttender`.
-
-    References
-    ----------
-    [1] Kim, Hyunjik, et al. "Attentive neural processes." arXiv preprint
-        arXiv:1901.05761 (2019).
     """
 
-    def __init__(self, p=1, length_scale=1., **kwargs):
+    def __init__(self, kq_size=None, p=1, is_weight=False, **kwargs):
         super().__init__(**kwargs)
         self.p = p
-        self.length_scale
+        self.is_weight = is_weight
+        if self.is_weight:
+            self.weighter = nn.Linear(kq_size, kq_size)
+
+        self.reset_parameters()
 
     def score(self, keys, queries):
         batch_size, n_queries, kq_size = queries.size()
         n_keys = keys.size(1)
 
-        keys = keys.view(batch_size, kq_size, 1, n_keys)
-        queries = queries.view(batch_size, kq_size, n_queries, 1)
+        keys = keys.view(batch_size, 1, n_keys, kq_size)
+        queries = queries.view(batch_size, n_queries, 1, kq_size)
+        diff = keys - queries
+        if self.is_weight:
+            diff = self.weighter(diff)
 
-        logits = - F.normalize(keys - queries, p=self.p, dim=1) / self.length_scale
+        logits = - torch.norm(diff, p=self.p, dim=-1)
 
         return logits
-
-    def logits_to_attn(self, logits):
-        """Convert logits to attention."""
-        if self.is_normalize:
-            attn = logits.softmax(dim=-1)
-        else:
-            # changes the postprocessing as in
-            # https://github.com/deepmind/neural-processes/blob/master/attentive_neural_process.ipynb
-            attn = logits.tanh() + 1
-        return attn
 
 
 class MultiheadAttender(nn.Module):

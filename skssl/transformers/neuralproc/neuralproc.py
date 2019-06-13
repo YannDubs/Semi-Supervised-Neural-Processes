@@ -116,7 +116,8 @@ class NeuralProcess(nn.Module):
                  LatentEncoder=MLP,
                  get_cntxt_trgt=context_target_split,
                  encoded_path="deterministic",
-                 PredictiveDistribution=Normal):
+                 PredictiveDistribution=Normal,
+                 x_transf_dim=None):
         super().__init__()
         self.x_dim = x_dim
         self.y_dim = y_dim
@@ -124,11 +125,12 @@ class NeuralProcess(nn.Module):
         self.encoded_path = encoded_path.lower()
         self.is_transform = False
         self.PredictiveDistribution = PredictiveDistribution
+        self.x_transf_dim = x_transf_dim if x_transf_dim is not None else self.r_dim
 
-        self.x_encoder = XEncoder(self.x_dim, self.r_dim)
-        self.xy_encoder = XYEncoder(self.r_dim, self.y_dim, self.r_dim)
+        self.x_encoder = XEncoder(self.x_dim, self.x_transf_dim)
+        self.xy_encoder = XYEncoder(self.x_transf_dim, self.y_dim, self.r_dim)
         self.aggregator = aggregator
-        self.decoder = Decoder(self.r_dim, self.r_dim, self.y_dim * 2)  # *2 because mean and var
+        self.decoder = Decoder(self.x_transf_dim, self.r_dim, self.y_dim * 2)  # *2 because mean and var
 
         if self.encoded_path in ["latent", "both"]:
             self.lat_encoder = LatentEncoder(self.r_dim, self.r_dim * 2)
@@ -332,7 +334,7 @@ class AttentiveNeuralProcess(NeuralProcess):
 
         super().__init__(x_dim, y_dim, encoded_path=encoded_path, **kwargs)
 
-        self.attender = get_attender(attention, self.r_dim, is_normalize=is_normalize)
+        self.attender = get_attender(attention, self.x_transf_dim, is_normalize=is_normalize)
 
         self.reset_parameters()
 

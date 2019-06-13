@@ -77,3 +77,30 @@ def linear_init(module, activation="relu"):
         return nn.init.kaiming_uniform_(x, nonlinearity='relu')
     elif activation_name in ["sigmoid", "tanh"]:
         return nn.init.xavier_uniform_(x, gain=get_gain(activation))
+
+
+def init_param_(param, activation=None, is_positive=False, bound=0.05):
+    """Initialize inplace some parameters of the model that are not part of a
+    children module.
+
+    Parameters
+    ----------
+    param : nn.Parameters:
+        Parameters to initialize.
+
+    activation : torch.nn.modules.activation or str, optional)
+        Activation that will be used on the `param`.
+
+    is_positive : bool, optional
+        Whether to initilize only with positive values.
+
+    bound : float, optional
+        Maximum absolute value of the initealized values. By default `0.05` which
+        is keras default uniform bound.
+    """
+    gain = get_gain(activation)
+    if is_positive:
+        nn.init.uniform_(param, 1e-5, bound * gain)
+        return
+
+    nn.init.uniform_(param, -bound * gain, bound * gain)
