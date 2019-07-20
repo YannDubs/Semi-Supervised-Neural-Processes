@@ -111,22 +111,13 @@ class NeuralNetEstimator(skorch.NeuralNet):
     def get_loss(self, y_pred, y_true, X=None, training=False):
         # same but tries to redirect X
         y_true = to_tensor(y_true, device=self.device)
+        if X is not None:
+            X = to_tensor(X, device=self.device)
         try:
             loss = self.criterion_(y_pred, y_true, X=X)
         except TypeError:
             loss = self.criterion_(y_pred, y_true)
         return loss
-
-    def validation_step(self, Xi, yi, **fit_params):
-        # Make sure that Xi is on device
-        Xi = to_tensor(Xi, device=self.device)
-        # don't call super to allow using it without inheriting
-        return super().validation_step(Xi, yi, **fit_params)
-
-    def train_step_single(self, Xi, yi, **fit_params):
-        # Make sure that Xi is on device
-        Xi = to_tensor(Xi, device=self.device)
-        return super().train_step_single(Xi, yi, **fit_params)
 
 
 is_ssl_doc = """

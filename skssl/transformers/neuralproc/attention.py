@@ -3,10 +3,11 @@ import math
 import torch
 
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.modules.distance import CosineSimilarity, PairwiseDistance
 
 from skssl.predefined import MLP
-from skssl.utils.initialization import weights_init
+from skssl.utils.initialization import weights_init, init_param_
 from skssl.utils.torchextend import identity
 
 
@@ -70,6 +71,8 @@ def get_attender(attention, kq_size=None, is_normalize=True, **kwargs):
         attender = MultiheadAttender(kq_size, **kwargs)
     elif attention == "transformer":
         attender = TransformerAttender(kq_size, **kwargs)
+    elif attention == "generalized_conv":
+        attender = GeneralizedConvAttender(1, is_normalize=is_normalize, **kwargs)
     else:
         raise ValueError("Unknown attention method {}".format(attention))
 
@@ -449,3 +452,254 @@ class TransformerAttender(MultiheadAttender):
         context = self.layer_norm2(context + self.dot.dropout(self.mlp(context)))
 
         return context
+
+
+class GaussianRBF(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.length_scale = nn.Parameter(torch.tensor([-1.]))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # initial length scale of ~0.3 => assumes that does "3" variations
+        self.length_scale = nn.Parameter(torch.tensor([-1.]))
+
+    def forward(self, x):
+        out = torch.exp(- (x / F.softplus(self.length_scale)).pow(2))
+        return out
+
+
+class BroadcastedConv(nn.Module):
+    def __init__(self, in_channels, out_channels, *args, **kwargs):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.conv = nn.Conv1d(1, 1, *args, **kwargs)
+        self.linear = nn.Linear(self.in_channels, self.out_channels)
+        self.reset_parameters()
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        # put in channels as batches
+        x = x.view(batch_size * self.in_channels, 1, -1)
+        x = self.conv(x)
+        x = x.view(batch_size, -1, self.in_channels)
+        x = self.linear(x)
+        x = x.view(batch_size, self.out_channels, -1)
+        return x
+
+    def reset_parameters(self):
+        weights_init(self)
+
+
+class DepthSepConv(nn.Module):
+    def __init__(self, nin, nout, *args, kernels_per_layer=1, **kwargs):
+        super().__init__()
+        self.kernels_per_layer = nin if kernels_per_layer is None else kernels_per_layer
+        self.depthwise = nn.Conv1d(nin, nin * self.kernels_per_layer, *args,
+                                   groups=nin, **kwargs)
+        self.pointwise = nn.Conv1d(nin * self.kernels_per_layer, nout, 1)
+
+    def forward(self, x):
+        out = self.depthwise(x)
+        out = self.pointwise(out)
+        return out
+
+    def reset_parameters(self):
+        weights_init(self)
+
+
+class GeneralizedConvAttender(nn.Module):
+    """WIP"""
+
+    def __init__(self, value_size,
+                 RadialFunc=GaussianRBF,
+                 n_tmp_queries=1024,
+                 n_conv=5,
+                 activation=nn.ReLU,
+                 is_batchnorm=False,
+                 kernel_size=7,
+                 is_normalize=True,
+                 is_concat=True,
+                 n_chan=30,
+                 is_depth_separable_conv=True,
+                 dilation=2,
+                 is_u_style=False,
+                 **kwargs):
+        super().__init__()
+        self.value_size = value_size
+        # add density channel
+        n_input_chan = self.value_size + 1
+        self.radial_func = RadialFunc()
+        self.is_normalize = is_normalize
+        self.n_chan = n_chan
+        self.n_conv = n_conv
+        self.is_u_style = is_u_style
+        self.is_concat = is_concat
+        self.n_tmp_queries = n_tmp_queries
+        self.activation = activation()
+
+        # linear layer to mix channels
+        self.linear = nn.Linear(n_input_chan, n_chan)
+        # density layer transform
+        self.density_transform = nn.Linear(1, 1)
+        conv = DepthSepConv if is_depth_separable_conv else nn.Conv1d
+
+        self.convs = nn.ModuleList([conv(self.n_chan, self.n_chan, kernel_size,
+                                         padding=(kernel_size // 2) * dilation,
+                                         dilation=dilation)
+                                    for _ in range(self.n_conv)])
+
+        if self.n_conv > 0:
+            self.tmp_queries = torch.linspace(-1, 1, self.n_tmp_queries)
+
+        normalization = nn.BatchNorm1d if is_batchnorm else nn.Identity
+        self.norms = nn.ModuleList([normalization(self.n_chan) for _ in range(self.n_conv)])
+
+        if self.is_u_style:
+            self.convs_up = nn.ModuleList([conv(self.n_chan * 2, self.n_chan, kernel_size,
+                                                padding=(kernel_size // 2) * dilation,
+                                                dilation=dilation)
+                                           for _ in range(self.n_conv)])
+            self.norms_up = nn.ModuleList([normalization(self.n_chan)
+                                           for _ in range(self.n_conv * 2)])
+
+        inp = self.n_chan + n_input_chan if self.is_concat else self.n_chan
+        # 2 * size because mean and variance
+        self.pred = MLP(inp, 2 * value_size, hidden_size=16, n_hidden_layers=3)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        weights_init(self)
+
+    def extend_tmp_queries(self, min_max):
+        """
+        Scale the temporary queries to be in a given range while keeping
+        the same density than during training (used for extrapolation.).
+        """
+        # reset
+        self.tmp_queries = torch.linspace(-1, 1, self.n_tmp_queries)
+
+        current_min = min(self.tmp_queries)
+        current_max = max(self.tmp_queries)
+        delta = self.tmp_queries[1] - self.tmp_queries[0]
+        n_queries_per_increment = len(self.tmp_queries) / (current_max - current_min)
+        n_add_left = math.ceil((current_min - min_max[0]) * n_queries_per_increment)
+        n_add_right = math.ceil((min_max[1] - current_max) * n_queries_per_increment)
+
+        tmp_queries = []
+        if n_add_left > 0:
+            tmp_queries.append(torch.arange(min_max[0], current_min, delta))
+        tmp_queries.append(self.tmp_queries)
+        if n_add_right > 0:
+            # add delta to not have twice the previous max boundary
+            tmp_queries.append(torch.arange(current_max, min_max[1], delta) + delta)
+        self.tmp_queries = torch.cat(tmp_queries)
+
+    def forward(self, keys, queries, values, **kwargs):
+        """
+        Compute the attention between given key and queries.
+
+        Parameters
+        ----------
+        keys : torch.Tensor, size=[batch_size, n_keys, kq_size]
+        queries : torch.Tensor, size=[batch_size, n_queries, kq_size]
+        values : torch.Tensor, size=[batch_size, n_keys, value_size]
+
+        Return
+        ------
+        context : torch.Tensor, size=[batch_size, n_queries, value_size]
+        """
+        batch_size, n_keys, value_size = values.shape
+        _, n_queries, kq_size = queries.shape
+        assert kq_size == 1
+
+        keys = keys.view(batch_size, 1, n_keys, kq_size)
+        values = values.view(batch_size, 1, n_keys, value_size)
+        queries = queries.view(batch_size, n_queries, 1, kq_size)
+
+        if self.n_conv != 0:
+            self.tmp_queries = self.tmp_queries.to(values.device)
+            tmp_queries = self.tmp_queries.view(1, -1, 1, 1)
+            # batch_size, n_tmp_queries, value_size + 1
+            grid_values = self.non_grided_conv(keys, tmp_queries, values,
+                                               is_concat_density=True)
+            grid_values = self.linear(grid_values)
+            grid_values = self.grided_conv(keys, tmp_queries, queries, grid_values)
+
+            tmp_queries = self.tmp_queries.view(1, 1, -1, 1)
+            out = self.non_grided_conv(tmp_queries, queries, grid_values)
+        else:
+            out = self.non_grided_conv(keys, queries, values, is_concat_density=True)
+            out = self.activation(self.linear(out))
+
+        if self.is_concat:
+            # concateate the density channel and direct predictions
+            to_concat = self.non_grided_conv(keys, queries, values,
+                                             is_concat_density=True)
+            out = torch.cat([out, to_concat], dim=-1)
+
+        return self.pred(out)
+
+    def non_grided_conv(self, keys, queries, values, is_concat_density=False):
+        # batch_size, n_queries, n_keys, 1
+        dist = torch.norm(keys - queries, p=2, dim=-1, keepdim=True)
+        weight = self.radial_func(dist)
+        if is_concat_density:
+            density_chan = - weight.sum(dim=2)
+
+        if self.is_normalize:
+            weight = torch.nn.functional.normalize(weight, dim=2, p=1)
+        elif is_concat_density:
+            weight = weight / 40
+        else:
+            # equivalent to changing initialization of convs
+            weight = weight / len(self.tmp_queries)
+
+        # batch_size, n_queries, value_size
+        values = (weight * values).sum(dim=2)
+
+        if is_concat_density:
+            density_chan = torch.sigmoid(self.density_transform(density_chan))
+            # don't normalize the density channel
+            values = torch.cat([values, density_chan], dim=-1)
+
+        return values
+
+    def grided_conv(self, keys, tmp_queries, queries, grid_values):
+        batch_size = grid_values.size(0)
+        grid_values = grid_values.view(batch_size, self.n_chan, -1)
+
+        if self.is_u_style:
+            # convs down
+            grid_values_down = [None] * len(self.convs)
+            for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
+                grid_values_down[i] = grid_values
+                grid_values = F.interpolate(grid_values,
+                                            mode="linear",
+                                            scale_factor=0.5,
+                                            align_corners=True)
+                # normalization and residual
+                grid_values = conv(self.activation(norm(grid_values)))
+
+            # convs up
+            for i, (conv, norm) in enumerate(zip(self.convs_up, self.norms_up)):
+                grid_values = F.interpolate(grid_values,
+                                            mode="linear",
+                                            scale_factor=2,
+                                            align_corners=True)
+                # concat unet style on chanel
+                grid_values = torch.cat([grid_values, grid_values_down[-i - 1]], dim=-2)
+                # normalization and residual
+                grid_values = conv(self.activation(norm(grid_values)))
+
+        else:
+            for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
+                # normalization and residual
+                grid_values = conv(self.activation(norm(grid_values))) + grid_values
+
+        # batch_size, 1, n_tmp_queries, 1, channel
+        grid_values = grid_values.view(batch_size, 1, -1, self.n_chan)
+
+        return grid_values

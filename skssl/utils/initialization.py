@@ -10,7 +10,15 @@ def weights_init(module, **kwargs):
     module : nn.Module
        module to initialize.
     """
+    module.is_resetted = True
     for m in module.modules():
+        try:
+            if hasattr(module, "reset_parameters") and module.is_resetted:
+                # don't reset if resetted already (might want special)
+                continue
+        except AttributeError:
+            pass
+
         if isinstance(m, torch.nn.modules.conv._ConvNd):
             # used in https://github.com/brain-research/realistic-ssl-evaluation/
             nn.init.kaiming_normal_(m.weight, mode="fan_out", **kwargs)
@@ -79,7 +87,7 @@ def linear_init(module, activation="relu"):
         return nn.init.xavier_uniform_(x, gain=get_gain(activation))
 
 
-def init_param_(param, activation=None, is_positive=False, bound=0.05):
+def init_param_(param, activation=None, is_positive=False, bound=0.05, shift=0):
     """Initialize inplace some parameters of the model that are not part of a
     children module.
 
@@ -97,10 +105,13 @@ def init_param_(param, activation=None, is_positive=False, bound=0.05):
     bound : float, optional
         Maximum absolute value of the initealized values. By default `0.05` which
         is keras default uniform bound.
+
+    shift : int, optional
+        Shift the initialisation by a certain value (same as adding a value after init).
     """
     gain = get_gain(activation)
     if is_positive:
-        nn.init.uniform_(param, 1e-5, bound * gain)
+        nn.init.uniform_(param, 1e-5 + shift, bound * gain + shift)
         return
 
-    nn.init.uniform_(param, -bound * gain, bound * gain)
+    nn.init.uniform_(param, -bound * gain + shift, bound * gain + shift)

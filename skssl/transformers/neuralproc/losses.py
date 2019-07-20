@@ -20,9 +20,10 @@ class NeuralProcessLoss(nn.Module):
         arXiv:1807.01622 (2018).
     """
 
-    def __init__(self, get_beta=lambda _: 1):
+    def __init__(self, get_beta=lambda _: 1, is_mean=False):
         super().__init__()
         self.get_beta = get_beta
+        self.is_mean = is_mean
 
     def forward(self, inputs, y=None, weight=None):
         """Compute the Neural Process Loss averaged over the batch.
@@ -42,7 +43,12 @@ class NeuralProcessLoss(nn.Module):
         p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt = inputs
         batch_size = Y_trgt.size(0)
 
-        neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1).sum(-1)
+        neg_log_like = - p_y_trgt.log_prob(Y_trgt).view(batch_size, -1)
+
+        if self.is_mean:
+            neg_log_like = neg_log_like.mean(-1)
+        else:
+            neg_log_like = neg_log_like.sum(-1)
 
         if q_z_trgt is not None:
             # use latent variables and training

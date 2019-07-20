@@ -7,7 +7,7 @@ from functools import reduce
 import operator
 
 
-def indep_shuffle(a, axis=-1):
+def indep_shuffle_(a, axis=-1):
     """
     Shuffle `a` in-place along the given axis.
 
@@ -22,7 +22,6 @@ def indep_shuffle(a, axis=-1):
     shp = b.shape[:-1]
     for ndx in np.ndindex(shp):
         np.random.shuffle(b[ndx])
-    return
 
 
 def ratio_to_int(percentage, max_val):
@@ -55,6 +54,19 @@ def cont_tuple_to_tuple_cont(container):
         return tuple(zip(*container))
     else:
         raise ValueError("Unkown conatiner type: {}.".format(type(container)))
+
+
+def tuple_cont_to_cont_tuple(tuples):
+    """Converts a tuple of containers (list, tuple, dict) to a container of tuples."""
+    if isinstance(tuples[0], dict):
+        # assumes keys are correct
+        return {k: tuple(dic[k] for dic in tuples) for k in tuples[0].keys()}
+    elif isinstance(tuples[0], list):
+        return list(zip(*tuples))
+    elif isinstance(tuples[0], tuple):
+        return tuple(zip(*tuples))
+    else:
+        raise ValueError("Unkown conatiner type: {}.".format(type(tuples[0])))
 
 
 def is_valid_image_shape(shape, min_width=0, max_width=float("inf")):

@@ -162,3 +162,14 @@ def reparameterize(mean_logvar, is_sample=True):
     else:
         # Reconstruction mode
         return mean
+
+
+class ReturnInput(nn.Module):
+    """Return the `which_input` input without any transformation."""
+
+    def __init__(self, which_input):
+        super().__init__()
+        self.which_input = which_input
+
+    def forward(self, *args):
+        return args[self.which_input - 1]

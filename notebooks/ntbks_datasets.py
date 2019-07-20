@@ -39,12 +39,16 @@ class GPDataset(Dataset):
                  kernel=1. * RBF(length_scale=1.),
                  min_max=(-5, 5),
                  n_samples=1000,
-                 n_points=100):
+                 n_points=100,
+                 **kwargs):
 
         self.n_samples = n_samples
         self.n_points = n_points
         self.min_max = min_max
-        self.gp = GaussianProcessRegressor(kernel=kernel)
+        self.generator = GaussianProcessRegressor(kernel=kernel,
+                                                  alpha=0.001,
+                                                  optimizer=None,  # don't fit kernel hyperparam
+                                                  **kwargs)
         self.data, self.targets = self.precompute_data()
 
     def __len__(self):
@@ -59,7 +63,7 @@ class GPDataset(Dataset):
             self.data, self.targets = self.precompute_data()
         return self.data[self.counter], self.targets[self.counter]
 
-    def precompute_data(self, min_max=None, n_samples=None, ):
+    def precompute_data(self):
         self.counter = 0
         return self._precompute_helper(self.min_max, self.n_samples, self.n_points)
 
@@ -73,7 +77,7 @@ class GPDataset(Dataset):
         # sort which is convenient for plotting
         X.sort()
 
-        targets = self.gp.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
+        targets = self.generator.sample_y(X[:, np.newaxis], n_samples).transpose(1, 0)
         targets = torch.from_numpy(targets)
         targets = targets.view(n_samples, n_points, 1).float()
 
