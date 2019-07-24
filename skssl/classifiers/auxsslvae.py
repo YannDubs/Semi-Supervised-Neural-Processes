@@ -6,8 +6,7 @@ arXiv preprint arXiv:1602.05473 (2016).
 """
 import torch
 
-from skssl.predefined import MLP, WideResNet, ReversedWideResNet
-from skssl.predefined.helpers import merge_flat_input
+from skssl.predefined import MLP, WideResNet, ReversedWideResNet, merge_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import kl_normal_loss
 from skssl.utils.helpers import HyperparameterInterpolator

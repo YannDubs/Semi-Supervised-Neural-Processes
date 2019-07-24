@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 
-from neuralproc.predefined import MLP
-from neuralproc.utils.initialization import weights_init
-from neuralproc.utils.helpers import mask_and_apply
+from skssl.utils.initialization import weights_init
+from skssl.utils.helpers import mask_and_apply
+
+from .mlp import MLP
+
 
 __all__ = ["RelativeSinusoidalEncodings", "SinusoidalEncodings",
            "merge_flat_input", "discard_ith_arg"]

@@ -22,6 +22,9 @@ def make_ssl_dataset_(supervised, n_labels,
                       unlabeled_class=UNLABELLED_CLASS, seed=123, is_stratify=True):
     """Take a supervised dataset and turn it into an unsupervised one(inplace),
     by giving a special unlabeled class as target."""
+    if n_labels == 1:
+        return  # want to have 100% labels
+
     stratify = supervised.targets if is_stratify else None
     idcs_unlabel, indcs_labels = train_test_split(list(range(len(supervised))),
                                                   stratify=stratify,

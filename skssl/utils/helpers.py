@@ -1,10 +1,24 @@
-import numpy as np
 import sys
 import math
 import warnings
-
 from functools import reduce
 import operator
+
+from torch import nn
+import numpy as np
+
+from .initialization import weights_init
+
+
+def mask_and_apply(x, mask, f):
+    """Applies a callable on a masked version of a input (last dim is input), output has to be 1 dim."""
+    # if is_keep_last_dim:
+    expanded_mask = mask.expand(*mask.shape[:-1], x.size(-1))
+    selected = x.masked_select(expanded_mask).view(-1, x.size(-1))
+    # else:
+    #selected = x.masked_select(mask).view(-1, 1)
+    tranformed_selected = f(selected).squeeze(-1)
+    return x[..., :1].masked_scatter(mask, tranformed_selected)
 
 
 def indep_shuffle_(a, axis=-1):
@@ -26,9 +40,9 @@ def indep_shuffle_(a, axis=-1):
 
 def ratio_to_int(percentage, max_val):
     """Converts a ratio to an integer if it is smaller than 1."""
-    if 1 <= percentage <= max_val:
+    if 1 < percentage <= max_val:
         out = percentage
-    elif 0 <= percentage < 1:
+    elif 0 <= percentage <= 1:
         out = percentage * max_val
     else:
         raise ValueError("percentage={} outside of [0,{}].".format(percentage, max_val))

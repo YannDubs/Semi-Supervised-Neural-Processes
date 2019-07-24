@@ -5,6 +5,8 @@ from torch.nn import functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
+from .initialization import weights_init
+
 
 def reduce(x, reduction="mean"):
     """Batch reduction of a tensor."""
@@ -173,3 +175,41 @@ class ReturnInput(nn.Module):
 
     def forward(self, *args):
         return args[self.which_input - 1]
+
+
+def make_depth_sep_conv(Conv):
+    """Make a convolution module depth separable."""
+    class DepthSepConv(nn.Module):
+        """Make a convolution depth separable.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+
+        out_channels : int
+            Number of output channels.
+
+        kernel_size : int
+
+        **kwargs :
+            Additional arguments to `Conv`
+        """
+
+        def __init__(self, in_channels, out_channels, kernel_size,
+                     confidence=False, bias=True, **kwargs):
+            super().__init__()
+            self.depthwise = Conv(in_channels, in_channels, kernel_size,
+                                  groups=in_channels, bias=bias, **kwargs)
+            self.pointwise = Conv(in_channels, out_channels, 1, bias=bias)
+            self.reset_parameters()
+
+        def forward(self, x):
+            out = self.depthwise(x)
+            out = self.pointwise(out)
+            return out
+
+        def reset_parameters(self):
+            weights_init(self)
+
+    return DepthSepConv

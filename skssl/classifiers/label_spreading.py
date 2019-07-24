@@ -4,6 +4,7 @@ from skopt.space import Real, Categorical, Integer
 
 __all__ = ["LabelSpreading"]
 
+
 class LabelSpreading(label_propagation.LabelSpreading):
     __doc__ = """
     Wrapper to change default hyperparameters and add `get_hypopt_search_space`.
@@ -21,7 +22,7 @@ class LabelSpreading(label_propagation.LabelSpreading):
         """Return a good default dearch space compatible with `skopt.BayesSearchCV`."""
         return [({'kernel': ['knn'],
                   'n_neighbors': Integer(500, 3000),
-                  "alpha": Real(0, 1)}),
+                  "alpha": Real(1e-5, 1 - 1e-5)}),
                 ({'kernel': ['rbf'],
                   'gamma': Real(1e-3, 2e+1, prior='log-uniform'),
-                  "alpha": Real(0, 1)})]
+                  "alpha": Real(1e-5, 1 - 1e-5)})]

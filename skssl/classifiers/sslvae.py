@@ -12,8 +12,7 @@ import torch.nn.functional as F
 from sklearn.base import ClassifierMixin, TransformerMixin
 
 from skssl.transformers import VAELoss
-from skssl.predefined import MLP, WideResNet, ReversedWideResNet
-from skssl.predefined.helpers import merge_flat_input
+from skssl.predefined import MLP, WideResNet, ReversedWideResNet, merge_flat_input
 from skssl.utils.initialization import weights_init
 from skssl.utils.torchextend import reparameterize
 from skssl.utils.helpers import cont_tuple_to_tuple_cont

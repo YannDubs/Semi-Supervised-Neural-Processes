@@ -137,7 +137,7 @@ class NeuralNetClassifier(NeuralNetEstimator, skorch.NeuralNetClassifier, Classi
     def __init__(self, *args,
                  devset=None,
                  criterion=torch.nn.CrossEntropyLoss,
-                 is_ssl=True,
+                 is_ssl=False,
                  **kwargs):
 
         self.is_ssl = is_ssl

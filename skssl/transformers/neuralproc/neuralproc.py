@@ -1,4 +1,5 @@
 import math
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -6,16 +7,13 @@ import torch.nn.functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
-from neuralproc.predefined import MLP, CNN, UnetCNN
-from neuralproc.utils.initialization import weights_init, init_param_
-from neuralproc.utils.helpers import (min_max_scale, MultivariateNormalDiag,
-                                      change_param)
-from neuralproc.utils.datasplit import CntxtTrgtGetter
-from neuralproc.utils.attention import get_attender
-from neuralproc.utils.setcnn import SetConv, GaussianRBF
 
-from skssl.predefined.encoders import (merge_flat_input, discard_ith_arg,
-                                       RelativeSinusoidalEncodings)
+from skssl.utils.initialization import weights_init, init_param_
+from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
+from skssl.predefined import (merge_flat_input, discard_ith_arg, SetConv, GaussianRBF,
+                              RelativeSinusoidalEncodings, MLP, UnetCNN, get_attender)
+
+from .datasplit import CntxtTrgtGetter
 
 
 __all__ = ["NeuralProcess", "AttentiveNeuralProcess", "GlobalNeuralProcess"]
@@ -135,8 +133,9 @@ class NeuralProcess(nn.Module):
                  get_cntxt_trgt=CntxtTrgtGetter(is_add_cntxts_to_trgts=True),
                  encoded_path="deterministic",
                  PredictiveDistribution=Normal,
-                 is_summary=False,
-                 is_use_x=True):
+                 is_use_x=True,
+                 min_std=0.1,
+                 Classifier=None):
         super().__init__()
 
         Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(Decoder,
@@ -146,13 +145,15 @@ class NeuralProcess(nn.Module):
                                                                         is_use_x,
                                                                         r_dim)
 
-        self.is_summary = is_summary
+        self.min_std = min_std
         self.get_cntxt_trgt = get_cntxt_trgt
         self.x_dim = x_dim
         self.y_dim = y_dim
         self.r_dim = r_dim
         self.encoded_path = encoded_path.lower()
         self.PredictiveDistribution = PredictiveDistribution
+        self.is_transform = False
+        self.classifier = Classifier()
 
         if x_transf_dim is None:
             self.x_transf_dim = self.x_dim
@@ -183,8 +184,8 @@ class NeuralProcess(nn.Module):
 
     def _get_defaults(self, Decoder, XYEncoder, x_transf_dim, XEncoder, is_use_x, r_dim):
         # don't use `x` to be translation equivariant
-        dflt_sub_decoder = change_param(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
-        dflt_sub_xyencoder = change_param(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
+        dflt_sub_decoder = partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True)
+        dflt_sub_xyencoder = partial(MLP, n_hidden_layers=2, is_force_hid_smaller=True)
 
         if not is_use_x:
             if Decoder is None:
@@ -208,15 +209,17 @@ class NeuralProcess(nn.Module):
         Split context and target in the class to make it compatible with
         usual datasets and training frameworks, then redirects to `forward_step`.
         """
-        if self.is_summary:
-            X = X[0:1, ...].repeat(*[s if i == 0 else 1 for i, s in enumerate(X.shape)])
-            y = y[0:1, ...].repeat(*[s if i == 0 else 1 for i, s in enumerate(y.shape)])
-        X_cntxt, Y_cntxt, X_trgt, Y_trgt = self.get_cntxt_trgt(X, y, **kwargs)
+
+        try:
+            X_cntxt, Y_cntxt, X_trgt, Y_trgt = self.get_cntxt_trgt(X, y, **kwargs)
+        except:
+            import pdb
+            pdb.set_trace()
 
         # fro now onwards, all inputs are assumed to be in [-1,1] when training
         if self.training:
-            if X_cntxt.max() > 1 or X_cntxt.min() < -1 or X_trgt.max() > 1 and X_trgt.min() < -1:
-                raise ValueError("Position inputs during training should be in [-1,1]. {} < X_cntxt < {} ; {} < X_trgt < {}.".format(X_cntxt.min(), X_cntxt.max(), X_trgt.min(), X_trgt.max()))
+            if X_cntxt.min() < -1 or X_trgt.min() < -1:
+                raise ValueError("Position inputs during training should be in [-1,1] (besides sparse dim). {} < X_cntxt  ; {} < X_trgt .".format(X_cntxt.min(), X_trgt.min()))
 
         return self.forward_step(X_cntxt, Y_cntxt, X_trgt, Y_trgt=Y_trgt)
 
@@ -270,13 +273,26 @@ class NeuralProcess(nn.Module):
                 # by learning a point representation for each function => bad representation
                 z_sample, q_z_trgt = self.latent_path(X_trgt, Y_trgt)
 
+        if self.is_transform and not self.training:
+            representation = self.deterministic_path(X_cntxt, Y_cntxt, None)
+            # for transform you want representation (could also want mean_z but r
+            # should have this info).
+            return representation
+
         if self.encoded_path in ["deterministic", "both"]:
             R_det, summary = self.deterministic_path(X_cntxt, Y_cntxt, X_trgt)
 
         dec_inp = self.make_dec_inp(R_det, z_sample, X_trgt)
         p_y_trgt = self.decode(dec_inp, X_trgt)
 
-        return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary
+        if self.classifier is not None:
+            pred_logits = self.classifier(summary)
+            return pred_logits, p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, None, X_trgt
+
+        if not self.training:
+            summary = None  # summary None =Y don't use in loss
+
+        return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary, X_trgt
 
     def latent_path(self, X, Y):
         """Latent encoding path."""
@@ -311,6 +327,9 @@ class NeuralProcess(nn.Module):
 
         # size = [batch_size, r_dim]
         r = self.aggregator(R_cntxt, dim=1)
+
+        if X_trgt is None:
+            return r
 
         batch_size, n_trgt, _ = X_trgt.shape
         R = r.unsqueeze(1).expand(batch_size, n_trgt, self.r_dim)
@@ -351,7 +370,7 @@ class NeuralProcess(nn.Module):
 
         loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
-        scale_trgt = 0.1 + 0.9 * F.softplus(scale_trgt)
+        scale_trgt = self.min_std + (1 - self.min_std) * F.softplus(scale_trgt)
         p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
 
         return p_y
@@ -419,6 +438,11 @@ class AttentiveNeuralProcess(NeuralProcess):
         # size = [batch_size, n_cntxt, r_dim]
         values = self.xy_encoder(keys, Y_cntxt)
 
+        if X_trgt is None:
+            r = self.aggregator(values, dim=1)
+            # transforming, don't expand the representation : batch_size, r_dim
+            return r
+
         # size = [batch_size, n_trgt, r_dim]
         queries = self.x_encoder(X_trgt)
 
@@ -454,7 +478,7 @@ class GlobalNeuralProcess(NeuralProcess):
         Self attention mechanism to use for {tmp_query} -> {tmp_query}. Note
         that the temporary queries will be uniformly sampled and you can thus use
         a convolution instead. Example:
-            - `change_param(CNN, is_chan_last=True)` : uses a multilayer CNN. To
+            - `partial(CNN, is_chan_last=True)` : uses a multilayer CNN. To
             be compatible with self attention the channel layer should be last.
             - `SelfAttention` : uses a self attention layer.
 
@@ -481,18 +505,18 @@ class GlobalNeuralProcess(NeuralProcess):
     def __init__(self, x_dim, y_dim,
                  n_tmp_queries=256,
                  keys_to_tmp_attn=SetConv,
-                 TmpSelfAttn=change_param(UnetCNN,
-                                          Conv=nn.Conv1d,
-                                          Pool=torch.nn.MaxPool1d,
-                                          upsample_mode="linear",
-                                          n_layers=10,
-                                          is_double_conv=True,
-                                          bottleneck=None,
-                                          is_depth_separable=True,
-                                          Normalization=nn.Identity,
-                                          is_chan_last=True,
-                                          kernel_size=7),
-                 tmp_to_queries_attn=change_param(SetConv, RadialBasisFunc=GaussianRBF),
+                 TmpSelfAttn=partial(UnetCNN,
+                                     Conv=nn.Conv1d,
+                                     Pool=torch.nn.MaxPool1d,
+                                     upsample_mode="linear",
+                                     n_layers=10,
+                                     is_double_conv=True,
+                                     bottleneck=None,
+                                     is_depth_separable=True,
+                                     Normalization=nn.Identity,
+                                     is_chan_last=True,
+                                     kernel_size=7),
+                 tmp_to_queries_attn=partial(SetConv, RadialBasisFunc=GaussianRBF),
                  is_skip_tmp=False,
                  is_use_x=False,
                  get_cntxt_trgt=CntxtTrgtGetter(is_add_cntxts_to_trgts=False),
@@ -558,10 +582,17 @@ class GlobalNeuralProcess(NeuralProcess):
         # size = [batch_size, n_tmp_trgt, r_dim]
         tmp_queries = tmp_queries.expand(X_cntxt.size(0), tmp_queries.size(1), self.x_transf_dim)
 
+        if X_trgt is None:
+            self.tmp_self_attn._is_summary = True
+
         # size = [batch_size, n_tmp, r_dim]
         tmp_values = self.keys_to_tmp_attender(keys, tmp_queries, values)  # , density
         tmp_values = torch.relu(tmp_values)
         tmp_values, summary = self.tmp_self_attn(tmp_values)  # , density)
+
+        if X_trgt is None:
+            return summary
+
         tmp_values = torch.relu(tmp_values)
 
         # size = [batch_size, n_trgt, r_dim]

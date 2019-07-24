@@ -7,7 +7,7 @@ import numpy as np
 from skssl.utils.helpers import ratio_to_int, prod, indep_shuffle_
 
 
-def precomputed_cntxt_trgt_split(X_cntxt, y_cntxt, X_trgt, y_trgt):
+def precomputed_cntxt_trgt_split(X_cntxt, y_cntxt, X_trgt, y_trgt, **kwargs):
     return X_cntxt, y_cntxt, X_trgt, y_trgt
 
 
@@ -212,8 +212,10 @@ class CntxtTrgtGetter:
     def select(self, X, y, indcs):
         """Select the correct values from X."""
         batch_size, num_points, x_dim = X.shape
-        indcs = indcs.to(X.device).unsqueeze(-1).expand(batch_size, -1, x_dim)
-        return torch.gather(X, 1, indcs).contiguous(), torch.gather(y, 1, indcs).contiguous()
+        y_dim = y.size(-1)
+        indcs_x = indcs.to(X.device).unsqueeze(-1).expand(batch_size, -1, x_dim)
+        indcs_y = indcs.to(X.device).unsqueeze(-1).expand(batch_size, -1, y_dim)
+        return torch.gather(X, 1, indcs_x).contiguous(), torch.gather(y, 1, indcs_y).contiguous()
 
     def reset(self):
         """Reset all temporary arguments."""

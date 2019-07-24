@@ -88,6 +88,10 @@ def get_supervised_iterator(dataset, **kwargs):
         y = dataset.targets
     except AttributeError:
         y = dataset.y
+
+    kwargs = {k: v for k, v in kwargs.items() if k != "shuffle"}
+    # remove shuffle because you have a sampler => mutually exclusive
+
     return DataLoader(dataset,
                       sampler=SupervisedSampler(y),
                       **kwargs)
