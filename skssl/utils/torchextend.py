@@ -3,9 +3,33 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from torch.distributions.independent import Independent
-from torch.distributions import Normal
+from torch.distributions import Normal, Categorical, kl_divergence
 
 from .initialization import weights_init
+
+
+def min_jensen_shannon_div(p1, p2):
+    M = Categorical(probs=(p1 + p2) / 2)
+    return torch.min(kl_divergence(Categorical(probs=p1), M) +
+                     kl_divergence(Categorical(probs=p2), M))
+
+
+def jensen_shannon_div(p1, p2):
+    p_avg = (p1 + p2) / 2
+    mask = (p_avg != 0).float()
+    # set to 0 p when M is 0 (because mean can only be 0 is vectors weree, but
+    # this is not the case due to numerical issues)
+    M = Categorical(probs=p_avg)
+    return ((kl_divergence(Categorical(probs=p1 * mask), M) +
+             kl_divergence(Categorical(probs=p2 * mask), M)) / 2)
+
+
+def total_var(p1, p2):
+    return (p1 - p2).abs().sum(-1) / 2
+
+
+def hellinger_dist(p1, p2):
+    return (p1.sqrt() - p2.sqrt()).pow(2).sum(-1).sqrt() / (2**0.5)
 
 
 def reduce(x, reduction="mean"):

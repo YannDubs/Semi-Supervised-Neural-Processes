@@ -153,7 +153,7 @@ class NeuralProcess(nn.Module):
         self.encoded_path = encoded_path.lower()
         self.PredictiveDistribution = PredictiveDistribution
         self.is_transform = False
-        self.classifier = Classifier()
+        self.classifier = Classifier() if Classifier is not None else None
 
         if x_transf_dim is None:
             self.x_transf_dim = self.x_dim
@@ -286,13 +286,20 @@ class NeuralProcess(nn.Module):
         p_y_trgt = self.decode(dec_inp, X_trgt)
 
         if self.classifier is not None:
-            pred_logits = self.classifier(summary)
-            return pred_logits, p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, None, X_trgt
+            pred_logits = self.classifier(torch.cat([Y_cntxt.mean(1),
+                                                     Y_cntxt.max(1)[0],
+                                                     Y_cntxt.min(1)[0],
+                                                     Y_cntxt.var(1, unbiased=False),
+                                                     summary], dim=-1))
+
+            if not self.training:
+                return (pred_logits,)  # when not training just return pred => validtion loss is just cross entropy
+            return pred_logits, p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, None, X_trgt, X_cntxt
 
         if not self.training:
             summary = None  # summary None =Y don't use in loss
 
-        return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary, X_trgt
+        return p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary, X_trgt, X_cntxt
 
     def latent_path(self, X, Y):
         """Latent encoding path."""

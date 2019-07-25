@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch.distributions import Normal, Categorical, kl_divergence
 
 from skssl.training.helpers import split_labelled_unlabelled
+from skssl.utils.torchextend import (hellinger_dist, jensen_shannon_div,
+                                     min_jensen_shannon_div, total_var)
 
 __all__ = ["NeuralProcessLoss"]
 
@@ -26,17 +28,30 @@ class NeuralProcessLoss(nn.Module):
         arXiv:1807.01622 (2018).
     """
 
-    def __init__(self, get_beta=lambda: 1,
+    def __init__(self,
+                 get_beta=lambda: 1,
                  is_sparse=False,
                  is_use_as_metric=False,
                  is_summary_loss=False,
-                 ssl_loss=None):  # "supervised", "unsupervised", "both"
+                 ssl_loss=None,  # "supervised", "unsupervised", "both"
+                 get_lambda_clf=lambda: 1,
+                 is_ssl_only=False,
+                 distance="jsd",
+                 n_max_elements=None,  # if given, used to to scale the loss
+                 is_entropies=True,
+                 is_consistency=True):
         super().__init__()
         self.get_beta = get_beta
         self.is_use_as_metric = is_use_as_metric
         self.is_sparse = is_sparse
         self.is_summary_loss = is_summary_loss
         self.ssl_loss = ssl_loss
+        self.get_lambda_clf = get_lambda_clf
+        self.is_ssl_only = is_ssl_only
+        self.distance = distance
+        self.n_max_elements = n_max_elements
+        self.is_entropies = is_entropies
+        self.is_consistency = is_consistency
 
         if self.ssl_loss in ["supervised", "both"]:
             self.criterion = nn.CrossEntropyLoss(ignore_index=-1, reduction="mean")
@@ -56,22 +71,50 @@ class NeuralProcessLoss(nn.Module):
         weight: torch.Tensor, size = [batch_size,]
             Weight of every example. If None, every example is weighted by 1.
         """
+        classifier_loss = 0
+
         if self.ssl_loss is not None:
+
             pred_logits = inputs[0]
             inputs = inputs[1:]
             pred_logits_lab, pred_logits_unlab = split_labelled_unlabelled(pred_logits, y)
+            batch_size_unlab = pred_logits_unlab.size(0)
 
-            if self.ssl_loss in ["supervised", "both"]:
-                sup_loss = self.criterion(pred_logits, y)
-
-            if self.ssl_loss in ["unsupervised", "both"]:
-                batch_size_unlab = pred_logits_unlab.size(0)
-                p1 = pred_logits_unlab[:batch_size_unlab // 2, ...]
-                p2 = pred_logits_unlab[batch_size_unlab // 2:, ...]
-                unsup_loss = (kl_divergence(p1, p2) + kl_divergence(p2, p1)) / 2  # make symmetric
-        else:
-            sup_loss = 0
+            sup_loss = self.criterion(pred_logits, y)
             unsup_loss = 0
+
+            if self.ssl_loss == "both" and batch_size_unlab != 0:
+
+                pred_p_unlab = pred_logits_unlab.softmax(-1)
+                p1 = pred_p_unlab[:batch_size_unlab // 2, ...]
+                p2 = pred_p_unlab[batch_size_unlab // 2:, ...]
+
+                if self.is_consistency:
+                    if self.distance == "jsd":
+                        dist = jensen_shannon_div(p1, p2)
+                    elif self.distance == "totalvar":
+                        dist = total_var(p1, p2)
+                    else:
+                        raise ValueError("Unkown dist =={}.".format(dist))
+
+                    unsup_loss = unsup_loss + dist.mean(0)
+
+                if self.is_entropies:
+                    entropies = Categorical(probs=p1).entropy() + Categorical(probs=p2).entropy()
+                    unsup_loss = unsup_loss + entropies.mean(0) * 0.01
+
+            classifier_loss = sup_loss + unsup_loss
+
+            if len(inputs) == 0:
+                return sup_loss  # if validation only show supervised loss (beucase you are not batch duplicating cannot show unseupervised + no unsupervised in any case)
+
+            if self.n_max_elements is not None:
+                X_cntxt = inputs[6]
+                n_cntxt = X_cntxt.size(1)
+                classifier_loss = classifier_loss * n_cntxt / self.n_max_elements
+
+            if self.is_ssl_only:
+                return classifier_loss
 
         p_y_trgt, Y_trgt, q_z_trgt, q_z_cntxt, summary = inputs[:5]
         batch_size, n_trgt, _ = Y_trgt.shape
@@ -128,10 +171,16 @@ class NeuralProcessLoss(nn.Module):
         else:
             summary_loss = 0
 
-        loss = (neg_log_like + self.get_beta() * kl_loss + summary_loss * 0.1 +
-                sup_loss + unsup_loss)
+        loss = neg_log_like + self.get_beta() * kl_loss + summary_loss * 0.1
 
         if weight is not None:
+            assert self.ssl_loss is None
             loss = loss * weight
 
-        return loss.mean(dim=0)
+        loss = loss.mean(dim=0) + self.get_lambda_clf() * classifier_loss
+
+        if not torch.isfinite(loss):
+            import pdb
+            pdb.set_trace()
+
+        return loss
