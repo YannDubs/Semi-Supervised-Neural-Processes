@@ -136,7 +136,7 @@ class ConvBlock(nn.Module):
         if self.confidence == "sparse":
             self.sparse_conv = Conv(in_chan, out_chan, kernel_size, **kwargs)
             self.sparse_conv.weight.requires_grad = False
-            self.sparse_conv.weight.fill_(0.)
+            self.sparse_conv.weight.fill_(1.)
             self.pool = nn.MaxPool1d(kernel_size, padding=padding, stride=1)
 
         if is_depth_separable:
@@ -325,7 +325,7 @@ class SparseUnetCNN(SparseCNN):
         for i in range(n_down_blocks + 1, n_blocks):
             X = F.interpolate(X, mode=self.upsample_mode, scale_factor=self.pooling_size,
                               align_corners=True)
-            X = torch.cat((X, residuals[n_down_blocks - i]), dim=-2)  # conncat on channels
+            X = torch.cat((X, residuals[n_down_blocks - i]), dim=1)  # conncat on channels
 
             if self.confidence is not None:
                 density = F.interpolate(density, mode=self.upsample_mode,
@@ -557,7 +557,7 @@ class UnetCNN(CNN):
 
         # Bottleneck
         X = self._apply_conv_block_i(X, n_down_blocks)
-        summary = X.mean(-1) # summary before forcing same bottleneck!
+        summary = X.view(*X.shape[:2], -1).mean(-1)  # summary before forcing same bottleneck!
 
         if self.is_force_same_bottleneck and self.training:
             # if all the batches are from the same function then use the same
@@ -574,7 +574,7 @@ class UnetCNN(CNN):
         for i in range(n_down_blocks + 1, n_blocks):
             X = F.interpolate(X, mode=self.upsample_mode, scale_factor=self.pooling_size,
                               align_corners=True)
-            X = torch.cat((X, residuals[n_down_blocks - i]), dim=-2)  # conncat on channels
+            X = torch.cat((X, residuals[n_down_blocks - i]), dim=1)  # conncat on channels
             X = self._apply_conv_block_i(X, i)
 
         return X, summary

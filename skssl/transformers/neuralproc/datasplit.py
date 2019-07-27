@@ -126,7 +126,8 @@ class CntxtTrgtGetter:
                  contexts_getter=GetRandomIndcs(),
                  targets_getter=get_all_indcs,
                  is_add_cntxts_to_trgts=True,
-                 is_rm_cntxts_from_trgts=False):
+                 is_rm_cntxts_from_trgts=False,
+                 is_grided=False):
         self.contexts_getter = contexts_getter
         self.targets_getter = targets_getter
         self.is_add_cntxts_to_trgts = is_add_cntxts_to_trgts
@@ -136,7 +137,7 @@ class CntxtTrgtGetter:
         # temporary args that can be changed without chaning the real ones (tmp)
         self.tmp_args = dict()
 
-    def __call__(self, X, y=None, context_indcs=None, target_indcs=None):
+    def __call__(self, X, y=None, context_indcs=None, target_indcs=None, is_grided=False):
         """
         Parameters
         ----------
@@ -172,6 +173,9 @@ class CntxtTrgtGetter:
             target_indcs = self.add_cntxts_to_trgts(num_points, target_indcs, context_indcs)
         elif is_rm_cntxts_from_trgts:
             target_indcs = self.rm_cntxts_from_trgts(num_points, target_indcs, context_indcs)
+
+        if is_grided:
+            return X, context_indcs, target_indcs
 
         X_cntxt, Y_cntxt = self.select(X, y, context_indcs)
         X_trgt, Y_trgt = self.select(X, y, target_indcs)
@@ -257,11 +261,11 @@ class RandomMasker(GetRandomIndcs):
                          max_n_indcs=max_nnz,
                          is_batch_repeat=is_batch_repeat)
 
-    def __call__(self, batch_size, n_possible_points):
+    def __call__(self, batch_size, mask_shape, **kwargs):
         n_possible_points = prod(mask_shape)
-        nnz_indcs = super().__call__(batch_size, n_possible_points)
+        nnz_indcs = super().__call__(batch_size, n_possible_points, **kwargs)
 
-        if is_batch_repeat:
+        if self.is_batch_repeat:
             # share memory
             mask = torch.zeros(n_possible_points).byte()
             mask = mask.unsqueeze(0).expand(batch_size, n_possible_points)
@@ -333,7 +337,7 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
                          targets_getter=target_masker,
                          **kwargs)
 
-    def __call__(self, X, y=None, context_mask=None, target_mask=None):
+    def __call__(self, X, y=None, context_mask=None, target_mask=None, **kwargs):
         """
         Parameters
         ----------
@@ -358,7 +362,8 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
         """
         return super().__call__(X,
                                 context_indcs=context_mask,
-                                target_indcs=target_mask)
+                                target_indcs=target_mask,
+                                **kwargs)
 
     def add_cntxts_to_trgts(self, grid_shape, target_mask, context_mask):
         """Add context points to targets: has been shown emperically better."""

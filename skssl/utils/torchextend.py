@@ -221,12 +221,29 @@ def make_depth_sep_conv(Conv):
         """
 
         def __init__(self, in_channels, out_channels, kernel_size,
-                     confidence=False, bias=True, **kwargs):
+                     bias=True, **kwargs):
             super().__init__()
+            self.in_channels = in_channels
+            self.out_channels = out_channels
+            self.kernel_size = kernel_size
+            self.bias = bias
             self.depthwise = Conv(in_channels, in_channels, kernel_size,
                                   groups=in_channels, bias=bias, **kwargs)
             self.pointwise = Conv(in_channels, out_channels, 1, bias=bias)
             self.reset_parameters()
+
+        # dirsty code to make it seem like a usual convolution
+        @property
+        def weight(self): return self.depthwise.weight
+
+        @property
+        def stride(self): return self.depthwise.stride
+
+        @property
+        def padding(self): return self.depthwise.padding
+
+        @property
+        def dilation(self): return self.depthwise.dilation
 
         def forward(self, x):
             out = self.depthwise(x)
@@ -237,3 +254,11 @@ def make_depth_sep_conv(Conv):
             weights_init(self)
 
     return DepthSepConv
+
+
+def make_abs_conv(Conv):
+    class AbsConv(Conv):
+        def forward(self, input):
+            return F.conv2d(input, self.weight.abs(), self.bias, self.stride,
+                            self.padding, self.dilation, self.groups)
+    return AbsConv

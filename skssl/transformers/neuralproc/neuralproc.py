@@ -7,16 +7,18 @@ import torch.nn.functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 
-
+from skssl.utils.torchextend import make_depth_sep_conv, make_abs_conv
 from skssl.utils.initialization import weights_init, init_param_
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
+from skssl.utils.helpers import mask_featurize
 from skssl.predefined import (merge_flat_input, discard_ith_arg, SetConv, GaussianRBF,
                               RelativeSinusoidalEncodings, MLP, UnetCNN, get_attender)
 
 from .datasplit import CntxtTrgtGetter
 
 
-__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "GlobalNeuralProcess"]
+__all__ = ["NeuralProcess", "AttentiveNeuralProcess", "GlobalNeuralProcess",
+           "GridConvNeuralProcess", "GraphConvNeuralProcess"]
 
 
 class NeuralProcess(nn.Module):
@@ -135,7 +137,8 @@ class NeuralProcess(nn.Module):
                  PredictiveDistribution=Normal,
                  is_use_x=True,
                  min_std=0.1,
-                 Classifier=None):
+                 Classifier=None,
+                 output_range=None):
         super().__init__()
 
         Decoder, XYEncoder, x_transf_dim, XEncoder = self._get_defaults(Decoder,
@@ -154,6 +157,7 @@ class NeuralProcess(nn.Module):
         self.PredictiveDistribution = PredictiveDistribution
         self.is_transform = False
         self.classifier = Classifier() if Classifier is not None else None
+        self.output_range = output_range
 
         if x_transf_dim is None:
             self.x_transf_dim = self.x_dim
@@ -378,6 +382,12 @@ class NeuralProcess(nn.Module):
         loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
         # Following convention "Empirical Evaluation of Neural Process Objectives"
         scale_trgt = self.min_std + (1 - self.min_std) * F.softplus(scale_trgt)
+
+        if self.output_range is not None:
+            # rescale output with sigmoid
+            a, b = self.output_range
+            loc_trgt = torch.sigmoid(loc_trgt) * (b - a) + a
+
         p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
 
         return p_y
@@ -408,7 +418,6 @@ class AttentiveNeuralProcess(NeuralProcess):
         if `attention` takes `is_relative_pos` as argument
         (`{"multihead", "transformer"}`). Note that still not equivarian because
         use the position for the key and query.
-
 
     kwargs :
         Additional arguments to `NeuralProcess`.
@@ -511,7 +520,7 @@ class GlobalNeuralProcess(NeuralProcess):
 
     def __init__(self, x_dim, y_dim,
                  n_tmp_queries=256,
-                 keys_to_tmp_attn=SetConv,
+                 keys_to_tmp_attn=partial(SetConv, RadialBasisFunc=GaussianRBF),
                  TmpSelfAttn=partial(UnetCNN,
                                      Conv=nn.Conv1d,
                                      Pool=torch.nn.MaxPool1d,
@@ -633,3 +642,173 @@ class GlobalNeuralProcess(NeuralProcess):
             # add delta to not have twice the previous max boundary
             tmp_queries_l.append(torch.arange(current_max, min_max[1], delta) + delta)
         self.tmp_queries = torch.cat(tmp_queries_l)
+
+
+class GridConvNeuralProcess(nn.Module):
+    def __init__(self, y_dim,
+                 r_dim=128,
+                 Decoder=partial(MLP, n_hidden_layers=4, is_force_hid_smaller=True),
+                 PredictiveDistribution=Normal,
+                 min_std=0.1,
+                 Classifier=None,
+                 output_range=None,
+                 is_normalize=True,
+                 Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(y_dim, y_dim, groups=y_dim,
+                                                             kernel_size=19, padding=19 // 2,
+                                                             bias=False),
+                 TmpSelfAttn=partial(UnetCNN,
+                                     Conv=nn.Conv2d,
+                                     Pool=torch.nn.MaxPool2d,
+                                     upsample_mode="linear",
+                                     n_layers=18,
+                                     is_double_conv=True,
+                                     bottleneck=None,
+                                     is_depth_separable=True,
+                                     Normalization=nn.BatchNorm2d,
+                                     is_chan_last=True,
+                                     kernel_size=9,
+                                     max_nchannels=256,
+                                     _is_summary=True)):
+        super().__init__()
+
+        self.min_std = min_std
+        self.y_dim = y_dim
+        self.r_dim = r_dim
+        self.PredictiveDistribution = PredictiveDistribution
+        self.is_transform = False
+        self.classifier = Classifier() if Classifier is not None else None
+        self.output_range = output_range
+        self.is_normalize = is_normalize
+        # pointwise density transform
+        self.density_transform_weight = nn.Parameter(torch.tensor([1.] * y_dim))
+        self.density_transform_bias = nn.Parameter(torch.tensor([-0.1] * y_dim))
+        self.conv = Conv(y_dim)
+        self.resizer = nn.Linear(y_dim * 2, self.r_dim)  # 2 vecause also channels of density
+
+        self.tmp_self_attender = TmpSelfAttn(self.r_dim)
+
+        # *2 because mean and var
+        self.decoder = Decoder(self.r_dim, self.y_dim * 2)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        init_param_(self.density_transform_weight, activation="sigmoid")
+        init_param_(self.density_transform_bias)
+        weights_init(self)
+
+    def forward(self, X, mask_context, mask_target, **kwargs):
+        """
+        Given a set of context pairs {x_i, y_i} and target points {x_t}, return
+        a set of posterior distribution over target points {y_trgt}.
+
+        Parameters
+        ----------
+        X: torch.Tensor, size=[batch_size, y_dim, *grid_shape]
+            All features {x_i}.
+
+        mask_context: torch.Tensor, size=[batch_size, *grid_shape]
+            Mask with ones for context poinrs.
+
+        mask_target: torch.Tensor, size=[batch_size, *grid_shape]
+            Mask with ones for target points.
+
+        Return
+        ------
+        p_y_trgt: torch.distributions.Distribution
+            Target distribution.
+
+        summary
+        """
+        X, mask_context, mask_target = self.preprocess_inputs(X, mask_context, mask_target)
+        batch_size, *grid_shape, y_dim = X.shape
+
+        # fillin the missing values
+        tmp_values = self.keys_to_tmp_attn(X, mask_context)
+
+        tmp_values = torch.relu(tmp_values)
+
+        # apply normal convolution
+        tmp_values, summary = self.tmp_self_attender(tmp_values)
+
+        if self.is_transform and not self.training:
+            return summary
+
+        # mask apply decoder
+        p_y_trgt = self.decode(tmp_values, mask_target)
+
+        if self.classifier is not None:
+            feat = mask_featurize([lambda x: x.mean(-2),
+                                   lambda x: x.min(-2)[0],
+                                   lambda x: x.max(-2)[0],
+                                   lambda x: x.var(-2, unbiased=False)],
+                                  X.view(batch_size, -1, self.y_dim), mask_context)
+            pred_logits = self.classifier(torch.cat([feat, summary], dim=-1))
+
+            if not self.training:
+                return (pred_logits,)  # when not training just return pred => validtion loss is just cross entropy
+            return pred_logits, p_y_trgt
+
+        return (p_y_trgt,)
+
+    def preprocess_inputs(self, X, mask_context, mask_target):
+        # put channels in last dim
+        X = X.permute(*([0] + list(range(2, X.dim())) + [1]))
+        return X, mask_context.unsqueeze(-1), mask_target.unsqueeze(-1)
+
+    def keys_to_tmp_attn(self, X, mask_context):
+        batch_size, *grid_shape, y_dim = X.shape
+
+        # put channels in second dim
+        X = X.permute(*([0, X.dim() - 1] + list(range(1, X.dim() - 1))))
+        mask_context = mask_context.permute(*([0, mask_context.dim() - 1] +
+                                              list(range(1, mask_context.dim() - 1))))
+
+        X = X * mask_context.float()
+
+        out = self.conv(X)
+        density = self.conv(mask_context.float().expand_as(X))
+
+        if self.is_normalize:
+            out = out / torch.clamp(density, min=1e-5)
+
+        density = torch.sigmoid(density.view(-1, y_dim) * self.density_transform_bias +
+                                self.density_transform_bias).view(batch_size, y_dim, *grid_shape)
+
+        X = torch.cat([out, density], dim=1)
+
+        # puts channel in last dim
+        X = X.permute(*([0] + list(range(2, X.dim())) + [1]))
+
+        return self.resizer(X)
+
+    def decode(self, X, mask_target):
+        """
+        Compute predicted distribution conditioned on representation and
+        target positions.
+        """
+
+        batch_size, *grid_shape, y_dim = X.shape
+
+        # only works because number of targets same in all batch
+        linear_trgts = X.masked_select(mask_target).view(batch_size, -1, y_dim)
+
+        # size = [batch_size, n_trgt, y_dim*2]
+        suff_stat_Y_trgt = self.decoder(linear_trgts)
+
+        loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
+        # Following convention "Empirical Evaluation of Neural Process Objectives"
+        scale_trgt = self.min_std + (1 - self.min_std) * F.softplus(scale_trgt)
+
+        if self.output_range is not None:
+            # rescale output with sigmoid
+            a, b = self.output_range
+            loc_trgt = torch.sigmoid(loc_trgt) * (b - a) + a
+
+        p_y = Independent(self.PredictiveDistribution(loc_trgt, scale_trgt), 1)
+
+        return p_y
+
+
+class GraphConvNeuralProcess(GridConvNeuralProcess):
+    pass

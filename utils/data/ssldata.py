@@ -324,6 +324,10 @@ class SVHN(datasets.SVHN):
         # make compatible with CIFAR10 dataset
         return self.labels
 
+    @targets.setter
+    def targets(self, value):
+        self.labels = value
+
 
 class MNIST(datasets.MNIST):
     """MNIST wrapper. Docs: `datasets.MNIST.`

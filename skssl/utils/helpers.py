@@ -10,8 +10,17 @@ import numpy as np
 from .initialization import weights_init
 
 
+def mask_featurize(funcs, X, mask):
+    return torch.stack([torch.cat([f(t[b][mask[b]])
+                                   for f in funcs])
+                        for b in range(t.size(0))], dim=0)
+
+
 def mask_and_apply(x, mask, f):
-    """Applies a callable on a masked version of a input (last dim is input), output has to be 1 dim."""
+    """
+    Applies a callable on a masked version of a input (last dim is input),
+    output has to be 1 dim.
+    """
     # if is_keep_last_dim:
     expanded_mask = mask.expand(*mask.shape[:-1], x.size(-1))
     selected = x.masked_select(expanded_mask).view(-1, x.size(-1))
