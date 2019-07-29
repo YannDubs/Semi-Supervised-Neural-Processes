@@ -80,15 +80,12 @@ if __name__ == "__main__":
     celeba_train, celeba_test = train_dev_split(adddata.get_dataset("celeba")(),
                                                 dev_size=0.1,
                                                 is_stratify=False)
-    svhn_train, _, svhn_test = get_train_dev_test_ssl("svhn", dev_size=0)
     mnist_train, _, mnist_test = get_train_dev_test_ssl("mnist", dev_size=0)
 
-    datasets = dict(svhn=(svhn_train, svhn_test),
-                    celeba=(celeba_train, celeba_test),
+    datasets = dict(celeba=(celeba_train, celeba_test),
                     mnist=(mnist_train, mnist_test))
 
-    data_specific_kwargs = dict(svhn=dict(y_dim=svhn_train.shape[0]),
-                                celeba=dict(y_dim=celeba_train.shape[0]),
+    data_specific_kwargs = dict(celeba=dict(y_dim=celeba_train.shape[0]),
                                 mnist=dict(y_dim=mnist_train.shape[0]))
 
     X_DIM = 2  # 2D spatial input
@@ -106,13 +103,13 @@ if __name__ == "__main__":
                       output_range=(0, 1))
 
     unet = partial(UnetCNN,
-                   Conv=torch.nn.Conv1d,
-                   Pool=torch.nn.MaxPool1d,
-                   upsample_mode="linear",
+                   Conv=torch.nn.Conv2d,
+                   Pool=torch.nn.MaxPool2d,
+                   upsample_mode="bilinear",
                    n_layers=14,
                    is_double_conv=True,
                    is_depth_separable=True,
-                   Normalization=torch.nn.BatchNorm1d,
+                   Normalization=torch.nn.BatchNorm2d,
                    is_chan_last=True,
                    bottleneck=None,
                    kernel_size=7,
@@ -154,28 +151,15 @@ if __name__ == "__main__":
 
     from ntbks_helpers import train_models_
 
-    _ = train_models_(datasets,
-                      models_general,
-                      NeuralProcessLoss,
-                      data_specific_kwargs=data_specific_kwargs,
-                      patience=15,
-                      chckpnt_dirname=None,  # chckpnt_dirname,
-                      max_epochs=1,  # N_EPOCHS,
-                      batch_size=BATCH_SIZE,
-                      is_retrain=IS_RETRAIN,
-                      callbacks=[],
-                      iterator_train__collate_fn=cntxt_trgt_collate(get_cntxt_trgt),
-                      iterator_valid__collate_fn=cntxt_trgt_collate(get_cntxt_trgt_test),
-                      mode="transformer")
-
+    # mnist and celeba for both
     _ = train_models_(datasets,
                       models_grided,
                       GridNeuralProcessLoss,
                       data_specific_kwargs=data_specific_kwargs,
-                      patience=15,
-                      chckpnt_dirname=None,  # chckpnt_dirname,
-                      max_epochs=1,  # N_EPOCHS,
-                      batch_size=16,  # use 16 because batch repeat
+                      patience=5,
+                      chckpnt_dirname=chckpnt_dirname,  # chckpnt_dirname,
+                      max_epochs=N_EPOCHS,
+                      batch_size=BATCH_SIZE,
                       is_retrain=IS_RETRAIN,
                       callbacks=[],
                       iterator_train__collate_fn=cntxt_trgt_collate(get_cntxt_trgt,
@@ -183,4 +167,19 @@ if __name__ == "__main__":
                                                                     is_repeat_batch=True),
                       iterator_valid__collate_fn=cntxt_trgt_collate(get_cntxt_trgt_test,
                                                                     is_grided=True),
+                      mode="transformer")
+
+    # only train mnist for him because memory hug
+    _ = train_models_({k: v for k, v in datasets.items() if k == "mnist"},
+                      models_general,
+                      NeuralProcessLoss,
+                      data_specific_kwargs=data_specific_kwargs,
+                      patience=5,
+                      chckpnt_dirname=chckpnt_dirname,  # chckpnt_dirname,
+                      max_epochs=N_EPOCHS,
+                      batch_size=32,  # make sure not too much
+                      is_retrain=IS_RETRAIN,
+                      callbacks=[],
+                      iterator_train__collate_fn=cntxt_trgt_collate(get_cntxt_trgt),
+                      iterator_valid__collate_fn=cntxt_trgt_collate(get_cntxt_trgt_test),
                       mode="transformer")

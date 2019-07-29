@@ -110,6 +110,8 @@ class NeuralNetEstimator(skorch.NeuralNet):
 
     def get_loss(self, y_pred, y_true, X=None, training=False):
         # same but tries to redirect X
+        #import pdb
+        # pdb.set_trace()
         y_true = to_tensor(y_true, device=self.device)
         if X is not None:
             X = to_tensor(X, device=self.device)

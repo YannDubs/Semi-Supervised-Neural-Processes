@@ -6,3 +6,4 @@ from .attention import *
 from .encoders import *
 from .selfattn import *
 from .rnn import *
+from .gcn import *

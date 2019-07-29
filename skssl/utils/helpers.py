@@ -3,17 +3,27 @@ import math
 import warnings
 from functools import reduce
 import operator
+from types import SimpleNamespace
 
+import torch
 from torch import nn
 import numpy as np
 
 from .initialization import weights_init
 
 
+def input_to_graph(inp):
+    adj = inp.pop("adj")
+    inp["edge_index"] = adj._indices()
+    inp["edge_attr"] = adj._values()
+    data = SimpleNamespace(**inp)
+    return data
+
+
 def mask_featurize(funcs, X, mask):
-    return torch.stack([torch.cat([f(t[b][mask[b]])
+    return torch.stack([torch.cat([f(X[b][mask[b]])
                                    for f in funcs])
-                        for b in range(t.size(0))], dim=0)
+                        for b in range(X.size(0))], dim=0)
 
 
 def mask_and_apply(x, mask, f):

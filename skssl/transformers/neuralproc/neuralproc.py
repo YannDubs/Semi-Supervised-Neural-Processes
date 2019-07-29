@@ -6,13 +6,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
+import torch_geometric
+from torch_geometric.nn import GINConv
 
 from skssl.utils.torchextend import make_depth_sep_conv, make_abs_conv
 from skssl.utils.initialization import weights_init, init_param_
 from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
-from skssl.utils.helpers import mask_featurize
+from skssl.utils.helpers import mask_featurize, input_to_graph
 from skssl.predefined import (merge_flat_input, discard_ith_arg, SetConv, GaussianRBF,
-                              RelativeSinusoidalEncodings, MLP, UnetCNN, get_attender)
+                              RelativeSinusoidalEncodings, MLP, UnetCNN, get_attender,
+                              GCN)
 
 from .datasplit import CntxtTrgtGetter
 
@@ -653,6 +656,9 @@ class GridConvNeuralProcess(nn.Module):
                  Classifier=None,
                  output_range=None,
                  is_normalize=True,
+                 activation=torch.relu,
+                 is_one_density=False,
+                 is_clf_features=True,
                  Conv=lambda y_dim: make_abs_conv(nn.Conv2d)(y_dim, y_dim, groups=y_dim,
                                                              kernel_size=19, padding=19 // 2,
                                                              bias=False),
@@ -671,6 +677,8 @@ class GridConvNeuralProcess(nn.Module):
                                      _is_summary=True)):
         super().__init__()
 
+        self.is_clf_features = is_clf_features
+        self.activation = activation
         self.min_std = min_std
         self.y_dim = y_dim
         self.r_dim = r_dim
@@ -679,11 +687,12 @@ class GridConvNeuralProcess(nn.Module):
         self.classifier = Classifier() if Classifier is not None else None
         self.output_range = output_range
         self.is_normalize = is_normalize
+        self.density_dim = y_dim if not is_one_density else 1
         # pointwise density transform
-        self.density_transform_weight = nn.Parameter(torch.tensor([1.] * y_dim))
-        self.density_transform_bias = nn.Parameter(torch.tensor([-0.1] * y_dim))
+        self.density_transform_weight = nn.Parameter(torch.tensor([1.] * self.density_dim))
+        self.density_transform_bias = nn.Parameter(torch.tensor([-0.1] * self.density_dim))
         self.conv = Conv(y_dim)
-        self.resizer = nn.Linear(y_dim * 2, self.r_dim)  # 2 vecause also channels of density
+        self.resizer = nn.Linear(y_dim + self.density_dim, self.r_dim)  # 2 vecause also channels of density
 
         self.tmp_self_attender = TmpSelfAttn(self.r_dim)
 
@@ -721,15 +730,14 @@ class GridConvNeuralProcess(nn.Module):
         summary
         """
         X, mask_context, mask_target = self.preprocess_inputs(X, mask_context, mask_target)
-        batch_size, *grid_shape, y_dim = X.shape
 
         # fillin the missing values
         tmp_values = self.keys_to_tmp_attn(X, mask_context)
 
-        tmp_values = torch.relu(tmp_values)
+        tmp_values = self.activation(tmp_values)
 
         # apply normal convolution
-        tmp_values, summary = self.tmp_self_attender(tmp_values)
+        tmp_values, summary = self.tmp_self_attn(tmp_values)
 
         if self.is_transform and not self.training:
             return summary
@@ -738,12 +746,7 @@ class GridConvNeuralProcess(nn.Module):
         p_y_trgt = self.decode(tmp_values, mask_target)
 
         if self.classifier is not None:
-            feat = mask_featurize([lambda x: x.mean(-2),
-                                   lambda x: x.min(-2)[0],
-                                   lambda x: x.max(-2)[0],
-                                   lambda x: x.var(-2, unbiased=False)],
-                                  X.view(batch_size, -1, self.y_dim), mask_context)
-            pred_logits = self.classifier(torch.cat([feat, summary], dim=-1))
+            pred_logits = self.classify(X, mask_context, summary)
 
             if not self.training:
                 return (pred_logits,)  # when not training just return pred => validtion loss is just cross entropy
@@ -751,10 +754,28 @@ class GridConvNeuralProcess(nn.Module):
 
         return (p_y_trgt,)
 
+    def classify(self, X, mask_context, summary):
+        if self.is_clf_features:
+            batch_size = X.size(0)
+            feat = mask_featurize([lambda x: x.mean(-2),
+                                   lambda x: x.min(-2)[0],
+                                   lambda x: x.max(-2)[0],
+                                   lambda x: x.var(-2, unbiased=False)],
+                                  X.view(batch_size, -1, self.y_dim),
+                                  mask_context.view(batch_size, -1))
+            pred_logits = self.classifier(torch.cat([feat, summary], dim=-1))
+        else:
+            pred_logits = self.classifier(summary)
+        return pred_logits
+
     def preprocess_inputs(self, X, mask_context, mask_target):
         # put channels in last dim
         X = X.permute(*([0] + list(range(2, X.dim())) + [1]))
         return X, mask_context.unsqueeze(-1), mask_target.unsqueeze(-1)
+
+    def tmp_self_attn(self, tmp_values):
+        tmp_values, summary = self.tmp_self_attender(tmp_values)
+        return tmp_values, summary
 
     def keys_to_tmp_attn(self, X, mask_context):
         batch_size, *grid_shape, y_dim = X.shape
@@ -769,18 +790,27 @@ class GridConvNeuralProcess(nn.Module):
         out = self.conv(X)
         density = self.conv(mask_context.float().expand_as(X))
 
-        if self.is_normalize:
-            out = out / torch.clamp(density, min=1e-5)
-
-        density = torch.sigmoid(density.view(-1, y_dim) * self.density_transform_bias +
-                                self.density_transform_bias).view(batch_size, y_dim, *grid_shape)
-
-        X = torch.cat([out, density], dim=1)
+        X = self._density_normalize_concat(out, density)
 
         # puts channel in last dim
         X = X.permute(*([0] + list(range(2, X.dim())) + [1]))
 
         return self.resizer(X)
+
+    def _density_normalize_concat(self, X, density):
+        batch_size, y_dim, *grid_shape = X.shape
+
+        if self.is_normalize:
+            X = X / torch.clamp(density, min=1e-5)
+
+        density = torch.sigmoid(density.view(-1, self.density_dim) *
+                                self.density_transform_weight +
+                                self.density_transform_bias
+                                ).view(batch_size, self.density_dim, *grid_shape)
+
+        X = torch.cat([X, density], dim=1)
+
+        return X
 
     def decode(self, X, mask_target):
         """
@@ -810,5 +840,93 @@ class GridConvNeuralProcess(nn.Module):
         return p_y
 
 
+def relu_graph(data):
+    data.x = torch.relu(data.x)
+    return data
+
+
 class GraphConvNeuralProcess(GridConvNeuralProcess):
-    pass
+    def __init__(self,
+                 y_dim,
+                 activation=relu_graph,
+                 is_one_density=True,
+                 Conv=lambda y_dim: GINConv(nn.Identity(), eps=1.),
+                 TmpSelfAttn=partial(GCN, eps=1., train_eps=True,
+                                     Conv=lambda i, o, **kw: GINConv(MLP(i, o,
+                                                                         n_hidden_layers=1),
+                                                                     **kw)),
+                 **kwargs):
+        super().__init__(y_dim,
+                         activation=activation,
+                         Conv=Conv,
+                         TmpSelfAttn=TmpSelfAttn,
+                         is_one_density=is_one_density,
+                         **kwargs)
+
+        self.reset_parameters()
+
+    def classify(self, data, mask_context, summary):
+        if self.is_clf_features:
+            x_cntxt = data.x[mask_context]
+            batch_cntxt = data.batch[mask_context] if data.batch is not None else None
+            pred_logits = self.classifier(torch.cat(
+                [torch_geometric.nn.global_mean_pool(x_cntxt, batch_cntxt),
+                 torch_geometric.nn.global_max_pool(x_cntxt, batch_cntxt),
+                 torch_geometric.nn.global_max_pool(-x_cntxt, batch_cntxt),
+                 summary], dim=-1))
+        else:
+            pred_logits = self.classifier(summary)
+        return pred_logits
+
+    def preprocess_inputs(self, data, mask_context, mask_target):
+        return input_to_graph(data), mask_context.unsqueeze(-1), mask_target.unsqueeze(-1)
+
+    def keys_to_tmp_attn(self, data, mask_context):
+        x = data.x * mask_context.float()
+
+        x = torch.cat([x, mask_context.float()], dim=-1)
+        out = self.conv(x, data.edge_index)
+
+        out, density = out[..., :-1], out[..., -1:]
+        out = self._density_normalize_concat(out, density)
+
+        data.x = self.resizer(out)
+
+        return data
+
+    def _density_normalize_concat(self, out, density):
+
+        if self.is_normalize:
+            out = out / torch.clamp(density, min=1e-5)
+
+        density = torch.sigmoid(density.view(-1, self.density_dim) *
+                                self.density_transform_weight +
+                                self.density_transform_bias
+                                ).view(out.size(0), self.density_dim)
+
+        out = torch.cat([out, density], dim=-1)
+
+        return out
+
+    def decode(self, data, mask_target):
+        """
+        Compute predicted distribution conditioned on representation and
+        target positions.
+        """
+        x_trgt = data.x[mask_target.squeeze(-1), :]
+
+        # size = [batch_size, n_trgt, y_dim*2]
+        suff_stat_Y_trgt = self.decoder(x_trgt)
+
+        loc_trgt, scale_trgt = suff_stat_Y_trgt.split(self.y_dim, dim=-1)
+        # Following convention "Empirical Evaluation of Neural Process Objectives"
+        scale_trgt = self.min_std + (1 - self.min_std) * F.softplus(scale_trgt)
+
+        if self.output_range is not None:
+            # rescale output with sigmoid
+            a, b = self.output_range
+            loc_trgt = torch.sigmoid(loc_trgt) * (b - a) + a
+
+        p_y = self.PredictiveDistribution(loc_trgt, scale_trgt)
+
+        return p_y
