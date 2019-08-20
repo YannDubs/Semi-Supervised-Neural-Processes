@@ -23,16 +23,17 @@ class FixRandomSeed(Callback):
         if self.verbose > 0:
             print("setting random seed to: ", self.seed)
 
-        torch.manual_seed(self.seed)
-        torch.cuda.manual_seed(self.seed)
+        if self.seed is not None:
+            torch.manual_seed(self.seed)
+            torch.cuda.manual_seed(self.seed)
 
-        try:
-            random.seed(self.seed)
-        except NameError:
-            import random
-            random.seed(self.seed)
+            try:
+                random.seed(self.seed)
+            except NameError:
+                import random
+                random.seed(self.seed)
 
-        np.random.seed(self.seed)
+            np.random.seed(self.seed)
         torch.backends.cudnn.deterministic = self.is_cudnn_deterministic
 
 

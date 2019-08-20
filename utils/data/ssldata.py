@@ -57,6 +57,8 @@ def get_train_dev_test_ssl(dataset,
                            root=None,
                            dev_size=0.1,
                            seed=123,
+                           is_augment=False,
+                           is_all_labels=False,
                            **kwargs):
     """Return the training, validation and test dataloaders
 
@@ -108,7 +110,9 @@ def get_train_dev_test_ssl(dataset,
         train, dev = train_dev_split(train, dev_size=dev_size, seed=seed, is_stratify=True)
     else:
         dev = None
-    make_ssl_dataset_(train, n_labels, seed=seed, is_stratify=True)
+
+    if not is_all_labels:
+        make_ssl_dataset_(train, n_labels, seed=seed, is_stratify=True, is_augment=is_augment)
 
     return train, dev, test
 

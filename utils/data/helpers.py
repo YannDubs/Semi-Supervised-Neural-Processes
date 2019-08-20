@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from sklearn.model_selection import PredefinedSplit
+import torch
 
 UNLABELLED_CLASS = -1
 
@@ -18,14 +19,35 @@ def merge_train_dev(train, dev):
     return train_valid_X, train_valid_y, cv
 
 
+def concat(init, add):
+    if isinstance(init, torch.Tensor):
+        out = torch.cat([init] + add, dim=0)
+    elif isinstance(init, np.ndarray):
+        out = np.concatenate([init] + add, axis=0)
+    elif isinstance(init, (list, tuple)):
+        out = list(init) + list(add)
+    else:
+        raise ValueError("Unkown type of init {}".format(type(init)))
+    return out
+
+
 def make_ssl_dataset_(supervised, n_labels,
-                      unlabeled_class=UNLABELLED_CLASS, seed=123, is_stratify=True):
+                      unlabeled_class=UNLABELLED_CLASS,
+                      seed=123,
+                      is_stratify=True,
+                      is_augment=False,
+                      is_graph=False):
     """Take a supervised dataset and turn it into an unsupervised one(inplace),
     by giving a special unlabeled class as target."""
     if n_labels == 1:
         return  # want to have 100% labels
 
-    stratify = supervised.targets if is_stratify else None
+    if is_graph:
+        targets = supervised.data.y
+    else:
+        targets = supervised.targets
+
+    stratify = targets if is_stratify else None
     idcs_unlabel, indcs_labels = train_test_split(list(range(len(supervised))),
                                                   stratify=stratify,
                                                   test_size=n_labels,
@@ -33,9 +55,28 @@ def make_ssl_dataset_(supervised, n_labels,
 
     supervised.n_labels = len(indcs_labels)
     # cannot set _DatasetSubset through indexing
-    targets = supervised.targets
     targets[idcs_unlabel] = unlabeled_class
-    supervised.targets = targets
+
+    if is_augment:
+        data = supervised.data
+        n_labels = len(indcs_labels)
+        n_unlab = len(idcs_unlabel)
+        factor = int(n_unlab / n_labels) - 1
+        labeled_data = data[indcs_labels]
+        labeled_targets = targets[indcs_labels]
+        data = concat(data, [labeled_data] * factor)
+        targets = concat(targets, [labeled_targets] * factor)
+        supervised.data = data
+
+        try:
+            supervised.indcs = concat(supervised.indcs, [supervised.indcs[indcs_labels]] * factor)
+        except AttributeError:
+            pass
+
+    if is_graph:
+        supervised.data.y = targets
+    else:
+        supervised.targets = targets
 
 
 class _DatasetSubset(Dataset):

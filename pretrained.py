@@ -7,17 +7,16 @@ import torch.nn as nn
 from sklearn.pipeline import Pipeline
 
 import skorch
-from skorch.callbacks import ProgressBar, Checkpoint, TrainEndCheckpoint
+from skorch.callbacks import ProgressBar, Checkpoint, TrainEndCheckpoint, EarlyStopping
 
 from skssl.training import NeuralNetEstimator, NeuralNetClassifier, NeuralNetTransformer
 from skssl.training.loaders import get_supervised_iterator
 from skssl.transformers import VAE, VAELoss
 from skssl.predefined import (WideResNet, ReversedWideResNet, ReversedSimpleCNN,
-                              SimpleCNN, MLP)
-from skssl.predefined.helpers import add_flat_input
+                              SimpleCNN, MLP, merge_flat_input)
 from skssl.classifiers import SSLVAELoss, SSLVAE, SSLAuxVAELoss, SSLAuxVAE
 from skssl.training.helpers import FixRandomSeed
-from utils.data.datasets import get_dataset, get_train_dev_test_ssl
+from utils.data.ssldata import get_dataset, get_train_dev_test_ssl
 from utils.helpers import FormatterNoDuplicate
 
 
@@ -167,10 +166,10 @@ def _pretrained_sslvae(dataset,
                            a_dim=z_dim,
                            transform_dim=z_dim,
                            AuxEncoder=MLP,
-                           Encoder=add_flat_input(MLP),
+                           Encoder=merge_flat_input(MLP),
                            Decoder=Decoder,
-                           AuxDecoder=add_flat_input(MLP),
-                           Classifier=add_flat_input(MLP),
+                           AuxDecoder=merge_flat_input(MLP),
+                           Classifier=merge_flat_input(MLP),
                            Transformer=Transformer)
         Loss = SSLAuxVAELoss
         pipeline_transformer = None
@@ -192,7 +191,7 @@ def _pretrained_sslvae(dataset,
         sslvae = SSLVAE(x_shape, n_classes,
                         z_dim=z_dim,
                         transform_dim=transform_dim,
-                        Encoder=add_flat_input(Encoder),
+                        Encoder=merge_flat_input(Encoder),
                         Decoder=Decoder,
                         Classifier=Encoder,
                         Transformer=Transformer)
@@ -214,6 +213,9 @@ def _pretrained_base(model, criterion, dataset, chckpt_name,
                      basedir="results/pretrained/",
                      seed=123,
                      max_epochs=100,
+                     is_all_labels=False,
+                     patience=None,
+                     suffix="",
                      **kwargs):
     """Instantiaite the model and checkpoint.
 
@@ -251,8 +253,11 @@ def _pretrained_base(model, criterion, dataset, chckpt_name,
     """
     chckpt_name = os.path.join(basedir, chckpt_name)
 
+    if is_all_labels:
+        chckpt_name += "_is_all_labels"
+
     if is_retrain:
-        train, devset, test = get_train_dev_test_ssl(dataset)
+        train, devset, test = get_train_dev_test_ssl(dataset, is_all_labels=is_all_labels)
 
         if transformer is not None and devset is not None:
             # given devset should also be transformed
@@ -261,13 +266,21 @@ def _pretrained_base(model, criterion, dataset, chckpt_name,
     else:
         devset = None
 
+    chckpt_name += suffix
+
     chckpt = Checkpoint(dirname=chckpt_name)
+
+    callbacks = [ProgressBar(),
+                 chckpt,
+                 TrainEndCheckpoint(dirname=chckpt_name, fn_prefix='train_end_'),
+                 FixRandomSeed(seed)]
+
+    if devset is not None and patience is not None:
+        callbacks.append(EarlyStopping(patience=patience))
+
     net = Trainer(model,
                   criterion=criterion,
-                  callbacks=[ProgressBar(),
-                             chckpt,
-                             TrainEndCheckpoint(dirname=chckpt_name, fn_prefix='train_end_'),
-                             FixRandomSeed(seed)],
+                  callbacks=callbacks,
                   devset=devset,
                   max_epochs=max_epochs,
                   **kwargs)

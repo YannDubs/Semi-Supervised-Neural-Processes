@@ -12,7 +12,7 @@ import torch
 N_THREADS = 8
 torch.set_num_threads(N_THREADS)
 
-import ntbks_add_data as adddata
+
 from functools import partial
 from utils.data.ssldata import get_dataset, get_train_dev_test_ssl
 from utils.data.helpers import train_dev_split
@@ -77,39 +77,27 @@ if __name__ == "__main__":
                                          target_masker=RandomMasker(min_nnz=0.50, max_nnz=0.99),
                                          is_add_cntxts_to_trgts=False)  # don't context points to tagrtes
 
-    celeba_train, celeba_test = train_dev_split(adddata.get_dataset("celeba")(),
-                                                dev_size=0.1,
-                                                is_stratify=False)
-    mnist_train, _, mnist_test = get_train_dev_test_ssl("mnist", dev_size=0)
+    cifar_train, _, cifar_test = get_train_dev_test_ssl("cifar10", dev_size=0)
     svhn_train, _, svhn_test = get_train_dev_test_ssl("svhn", dev_size=0)
+    # mnist_train, _, mnist_test = get_train_dev_test_ssl("mnist", dev_size=0) # mnist trained already
 
-    datasets = dict(celeba=(celeba_train, celeba_test),
-                    mnist=(mnist_train, mnist_test),
-                    svhn=(svhn_train, svhn_test))
+    datasets = dict(svhn=(svhn_train, svhn_test),
+                    cifar10=(cifar_train, cifar_test))
 
-    data_specific_kwargs = dict(celeba=dict(y_dim=celeba_train.shape[0]),
-                                mnist=dict(y_dim=mnist_train.shape[0]),
-                                svhn=dict(y_dim=svhn_train.shape[0]))
+    data_specific_kwargs = dict(svhn=dict(y_dim=svhn_train.shape[0]),
+                                cifar10=dict(y_dim=svhn_train.shape[0]))
 
     X_DIM = 2  # 2D spatial input
     #Y_DIM = data.shape[0]
     N_TARGETS = None
 
-    models_general = {}
     models_grided = {}
-
-    anp_kwargs = dict(r_dim=128,
-                      get_cntxt_trgt=precomputed_cntxt_trgt_split,
-                      attention="transformer",
-                      encoded_path="deterministic",
-                      XYEncoder=merge_flat_input(SelfAttention, is_sum_merge=True),
-                      output_range=(0, 1))
 
     unet = partial(UnetCNN,
                    Conv=torch.nn.Conv2d,
                    Pool=torch.nn.MaxPool2d,
                    upsample_mode="bilinear",
-                   n_layers=14,
+                   n_layers=18,
                    is_double_conv=True,
                    is_depth_separable=True,
                    Normalization=torch.nn.BatchNorm2d,
@@ -121,57 +109,27 @@ if __name__ == "__main__":
                    _is_summary=True,
                    )
 
-    cnn = partial(CNN,
-                  Conv=torch.nn.Conv2d,
-                  n_layers=5,
-                  is_depth_separable=True,
-                  Normalization=torch.nn.BatchNorm2d,
-                  is_chan_last=True,
-                  kernel_size=11
-                  )
-
-    gnp_kwargs = dict(r_dim=32,
-                      output_range=(0, 1),
-                      is_normalize=True,
-                      TmpSelfAttn=unet)
-
-    gnp_kwargs = dict(r_dim=32,
-                      output_range=(0, 1),
-                      is_normalize=True,
-                      TmpSelfAttn=unet)
-
-    gnp_simple_kwargs = dict(r_dim=256,
-                             output_range=(0, 1),
-                             is_normalize=True,
-                             TmpSelfAttn=cnn)
-
     gnp_large_kwargs = dict(r_dim=64,
                             output_range=(0, 1),
                             is_normalize=True,
-                            TmpSelfAttn=partial(unet, n_layers=18))
+                            TmpSelfAttn=unet)
 
     # initialize one model for each dataset
-    #models_general["anp_simple"] = partial(AttentiveNeuralProcess, x_dim=X_DIM, **anp_kwargs)
-    #models_grided["transformer_gnp_unet"] = partial(GridConvNeuralProcess, **gnp_kwargs)
-    models_grided["extended_gnp_simple"] = partial(GridConvNeuralProcess,
-                                                   **gnp_simple_kwargs)
-    #models_grided["transformer_gnp_large_unet"] = partial(GridConvNeuralProcess, **gnp_large_kwargs)
+    models_grided["transformer_gnp_large_unet"] = partial(GridConvNeuralProcess,
+                                                          **gnp_large_kwargs)
 
     from utils.helpers import count_parameters
-    for k, v in models_general.items():
-        print(k, "- N Param:", count_parameters(v(y_dim=3)))
 
     for k, v in models_grided.items():
         print(k, "- N Param:", count_parameters(v(y_dim=3)))
 
     N_EPOCHS = 100
-    BATCH_SIZE = 32
+    BATCH_SIZE = 16
     IS_RETRAIN = True  # if false load precomputed
     chckpnt_dirname = "results/notebooks/neural_process_images/"
 
     from ntbks_helpers import train_models_
 
-    # mnist and celeba for both
     _ = train_models_(datasets,
                       models_grided,
                       GridNeuralProcessLoss,
@@ -184,25 +142,7 @@ if __name__ == "__main__":
                       callbacks=[],
                       iterator_train__collate_fn=cntxt_trgt_collate(get_cntxt_trgt,
                                                                     is_grided=True,
-                                                                    # is_repeat_batch=True
-                                                                    ),
+                                                                    is_repeat_batch=True),
                       iterator_valid__collate_fn=cntxt_trgt_collate(get_cntxt_trgt_test,
                                                                     is_grided=True),
                       mode="transformer")
-    """
-
-    # only train mnist for him because memory hug
-    _ = train_models_({k: v for k, v in datasets.items() if k == "svhn"},
-                      models_general,
-                      NeuralProcessLoss,
-                      data_specific_kwargs=data_specific_kwargs,
-                      patience=5,
-                      chckpnt_dirname=chckpnt_dirname,  # chckpnt_dirname,
-                      max_epochs=N_EPOCHS,
-                      batch_size=16,  # make sure not too much
-                      is_retrain=IS_RETRAIN,
-                      callbacks=[],
-                      iterator_train__collate_fn=cntxt_trgt_collate(get_cntxt_trgt),
-                      iterator_valid__collate_fn=cntxt_trgt_collate(get_cntxt_trgt_test),
-                      mode="transformer")
-    """

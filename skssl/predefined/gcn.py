@@ -3,11 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import torch_geometric
-from torch_geometric.nn import GCNConv, GATConv
+from torch_sparse import spspmm
+from torch_geometric.nn import GCNConv, GATConv, TopKPooling
+from torch_geometric.utils import add_self_loops, remove_self_loops
+from torch_geometric.utils.repeat import repeat
+from torch_geometric.utils.num_nodes import maybe_num_nodes
 
 from skssl.utils.initialization import weights_init
 
-__all__ = ["GCN", "UnetGCN", "GAT"]
+__all__ = ["GCN", "UnetGCN", "GAT", "GraphUNet"]
 
 
 class GCN(torch.nn.Module):
@@ -21,7 +25,7 @@ class GCN(torch.nn.Module):
                  **kwargs):
         super().__init__()
 
-        self.n_channels = n_channels,
+        self.n_channels = n_channels
         self._is_summary = _is_summary
         self.n_layers = n_layers
         self.activation_ = Activation(inplace=True)
@@ -33,6 +37,7 @@ class GCN(torch.nn.Module):
 
         self.norms = nn.ModuleList([Normalization(out_chan)
                                     for _, out_chan in self.in_out_channels])
+        self.reset_parameters()
 
     def reset_parameters(self):
         weights_init(self)
@@ -74,28 +79,39 @@ class GCN(torch.nn.Module):
 class UnetGCN(GCN):
     def __init__(self, n_channels,
                  Conv=GCNConv,
-                 Pool=torch_geometric.nn.TopKPooling,
+                 Pool=TopKPooling,
                  is_double_conv=False,
                  max_nchannels=512,
                  bottleneck=None,
                  n_layers=5,
                  is_force_same_bottleneck=False,
+                 is_sum_res=True,
                  **kwargs):
 
         self.is_double_conv = is_double_conv
         self.max_nchannels = max_nchannels
+        self.bottleneck = bottleneck
+        self.is_sum_res = is_sum_res
         super().__init__(n_channels, Conv,
                          n_layers=n_layers,
                          is_res=False,
                          **kwargs)
 
-        pool_in_chan = [max(self.n_channels, self.max_nchannels)
-                        for i in range(self.n_layers // 2 + 1)]
+        factor_chan = 1 if self.bottleneck == "channels" else 2
+        pool_in_chan = [min(factor_chan**i * self.n_channels, self.max_nchannels)
+                        for i in range(self.n_layers // 2 + 1)][1:]
         self.pools = nn.ModuleList([Pool(in_chan) for in_chan in pool_in_chan])
         self.is_force_same_bottleneck = is_force_same_bottleneck
 
+        for pool in self.pools:
+            pool.reset_parameters()
+
+        self.reset_parameters()
+
     def apply_convs(self, X):
+
         x, edge_index, batch = X.x, X.edge_index, X.batch
+        edge_weight = x.new_ones((edge_index.size(1), ))
 
         n_blocks = self.n_layers // 2 if self.is_double_conv else self.n_layers
         n_down_blocks = n_blocks // 2
@@ -105,14 +121,22 @@ class UnetGCN(GCN):
 
         # Down
         for i in range(n_down_blocks):
-            x = self._apply_conv_block_i(x, edge_index, i)
+            x = self._apply_conv_block_i(x, edge_index, i, edge_weight=edge_weight)
             residuals[i] = x
-            x, edge_index, _, batch, perm, _ = self.pools(x, edge_index, batch=batch)
-            #edges[i] = edge_index
+
+            # not clear whether to save before or after augment
+            edges[i] = (edge_index, edge_weight)
+
+            # (A + I)^2
+            edge_index, edge_weight = self.augment_adj(edge_index, edge_weight, x.size(0))
+
+            x, edge_index, edge_weight, batch, perm = self.pools[i](x, edge_index,
+                                                                    edge_attr=edge_weight,
+                                                                    batch=batch)
             perms[i] = perm
 
         # Bottleneck
-        x = self._apply_conv_block_i(x, edge_index, i)
+        x = self._apply_conv_block_i(x, edge_index, n_down_blocks, edge_weight=edge_weight)
         summary = torch_geometric.nn.global_mean_pool(x, batch)  # summary before forcing same bottleneck!
 
         if self.is_force_same_bottleneck and self.training:
@@ -128,24 +152,40 @@ class UnetGCN(GCN):
 
         # Up
         for i in range(n_down_blocks + 1, n_blocks):
-            up = torch.zeros_like(x)
-            up[perms[n_down_blocks - i]] = residuals[n_down_blocks - i]
-            x = torch.cat((x, up), dim=1)  # conncat on channels
-            x = self._apply_conv_block_i(x, edge_index, i)
+            edge_index, edge_weight = edges[n_down_blocks - i]
+            res = residuals[n_down_blocks - i]
+            up = torch.zeros_like(res)
+            up[perms[n_down_blocks - i]] = x
+            if not self.is_sum_res:
+                x = torch.cat((res, up), dim=1)  # conncat on channels
+            else:
+                x = res + up
+            x = self._apply_conv_block_i(x, edge_index, i, edge_weight=edge_weight)
 
-        X.x, X.edge_index, X.batch
+        X.x = x
 
         return X, summary
 
-    def _apply_conv_block_i(self, x, edge_index, i):
+    def augment_adj(self, edge_index, edge_weight, num_nodes):
+        edge_index, edge_weight = add_self_loops(edge_index, edge_weight,
+                                                 num_nodes=num_nodes)
+        edge_index, edge_weight = sort_edge_index(edge_index, edge_weight,
+                                                  num_nodes)
+        edge_index, edge_weight = spspmm(edge_index, edge_weight, edge_index,
+                                         edge_weight, num_nodes, num_nodes,
+                                         num_nodes)
+        edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
+        return edge_index, edge_weight
+
+    def _apply_conv_block_i(self, x, edge_index, i, **kwargs):
         """Apply the i^th convolution block."""
         if self.is_double_conv:
             i *= 2
 
-        x = self.activation_(self.norms[i](self.convs[i](x, edge_index)))
+        x = self.activation_(self.norms[i](self.convs[i](x, edge_index, **kwargs)))
 
         if self.is_double_conv:
-            x = self.activation_(self.norms[i + 1](self.convs[i + 1](x, edge_index)))
+            x = self.activation_(self.norms[i + 1](self.convs[i + 1](x, edge_index, **kwargs)))
 
         return x
 
@@ -165,11 +205,12 @@ class UnetGCN(GCN):
             channel_list = [min(c, self.max_nchannels) for c in channel_list]
             # e.g.: [..., (32, 32), (32, 64), (64, 64), (64, 32), (32, 32), (32, 16) ...]
             in_out_channels = super()._get_in_out_channels(channel_list, n_layers)
-            # e.g.: [..., (32, 32), (32, 64), (64, 64), (128, 32), (32, 32), (64, 16) ...]
-            # due to concat
-            idcs = slice(len(in_out_channels) // 2 + 1, len(in_out_channels), 2)
-            in_out_channels[idcs] = [(in_chan * 2, out_chan)
-                                     for in_chan, out_chan in in_out_channels[idcs]]
+            if not self.is_sum_res:
+                # e.g.: [..., (32, 32), (32, 64), (64, 64), (128, 32), (32, 32), (64, 16) ...]
+                # due to concat
+                idcs = slice(len(in_out_channels) // 2 + 1, len(in_out_channels), 2)
+                in_out_channels[idcs] = [(in_chan * 2, out_chan)
+                                         for in_chan, out_chan in in_out_channels[idcs]]
         else:
             assert n_layers % 2 == 1, "n_layers={} not odd".format(n_layers)
             # e.g. if n_channels=16, n_layers=5: [16, 32, 64]
@@ -180,16 +221,17 @@ class UnetGCN(GCN):
             channel_list = [min(c, self.max_nchannels) for c in channel_list]
             # e.g.: [(16, 32), (32,64), (64, 64), (64, 32), (32, 16)]
             in_out_channels = super()._get_in_out_channels(channel_list, n_layers)
-            # e.g.: [(16, 32), (32,64), (64, 64), (128, 32), (64, 16)] due to concat
-            idcs = slice(len(in_out_channels) // 2 + 1, len(in_out_channels))
-            in_out_channels[idcs] = [(in_chan * 2, out_chan)
-                                     for in_chan, out_chan in in_out_channels[idcs]]
+            if not self.is_sum_res:
+                # e.g.: [(16, 32), (32,64), (64, 64), (128, 32), (64, 16)] due to concat
+                idcs = slice(len(in_out_channels) // 2 + 1, len(in_out_channels))
+                in_out_channels[idcs] = [(in_chan * 2, out_chan)
+                                         for in_chan, out_chan in in_out_channels[idcs]]
 
         return in_out_channels
 
 
 class GAT(nn.Module):
-    def __init__(self, in_channels, out_channels=None, dim=32, heads=8, dropout=0.3, n_layers=2):
+    def __init__(self, in_channels, out_channels=None, dim=8, heads=8, dropout=0.6, n_layers=2):
         super().__init__()
         self.dropout = dropout
         if out_channels is None:
@@ -204,12 +246,156 @@ class GAT(nn.Module):
         self.conv_out = GATConv(
             dim * heads, out_channels, heads=heads, concat=False, dropout=dropout)
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.conv_out.reset_parameters()
+        for conv in self.convs:
+            conv.reset_parameters()
+
     def forward(self, data):
         x = data.x
         for conv in self.convs:
-            x = F.elu(conv(x, data.edge_index))
+            x = F.relu(conv(x, data.edge_index))
 
         x = self.conv_out(x, data.edge_index)
         data.x = x
 
-        return data, None
+        return data
+
+
+def sort_edge_index(edge_index, edge_attr=None, num_nodes=None):
+    r"""Row-wise sorts edge indices :obj:`edge_index`.
+    Args:
+        edge_index (LongTensor): The edge indices.
+        edge_attr (Tensor, optional): Edge weights or multi-dimensional
+            edge features. (default: :obj:`None`)
+        num_nodes (int, optional): The number of nodes, *i.e.*
+            :obj:`max_val + 1` of :attr:`edge_index`. (default: :obj:`None`)
+    :rtype: (:class:`LongTensor`, :class:`Tensor`)
+    """
+    num_nodes = maybe_num_nodes(edge_index, num_nodes)
+
+    idx = edge_index[0] * num_nodes + edge_index[1]
+    perm = idx.argsort()
+
+    return edge_index[:, perm], None if edge_attr is None else edge_attr[perm]
+
+
+class GraphUNet(torch.nn.Module):
+    r"""The Graph U-Net model from the `"Graph U-Nets"
+    <https://arxiv.org/abs/1905.05178>`_ paper which implements a U-Net graph
+    architecture with graph pooling and unpooling operations.
+    Args:
+        channels (int): Size of each sample.
+        depth (int): The depth of the U-Net architecture.
+        pool_ratios (float or [float], optional): Graph pooling ratio for each
+            depth. (default: :obj:`0.5`)
+        sum_res (bool, optional): If set to :obj:`False`, will use
+            concatenation for integration of skip connections instead
+            summation. (default: :obj:`True`)
+        act (torch.nn.functional, optional): The nonlinearity to use.
+            (default: :obj:`torch.nn.functional.relu`)
+    """
+
+    def __init__(self, channels, depth, pool_ratios=0.5, sum_res=True,
+                 act=F.relu):
+        super(GraphUNet, self).__init__()
+
+        self.channels = channels
+        self.depth = depth
+        self.pool_ratios = repeat(pool_ratios, depth)
+
+        self.act = act
+        self.sum_res = sum_res
+
+        self.initial_conv = GCNConv(channels, channels, improved=True)
+
+        self.pools = torch.nn.ModuleList()
+        self.down_convs = torch.nn.ModuleList()
+        for i in range(depth):
+            self.pools.append(TopKPooling(channels, self.pool_ratios[i]))
+            self.down_convs.append(GCNConv(channels, channels, improved=True))
+        self.up_convs = torch.nn.ModuleList()
+        for i in range(depth - 1):
+            in_channels = channels if sum_res else 2 * channels
+            self.up_convs.append(GCNConv(in_channels, channels, improved=True))
+
+        self.final_conv = GCNConv(in_channels, channels, improved=True)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.initial_conv.reset_parameters()
+        self.final_conv.reset_parameters()
+
+        for pool in self.pools:
+            pool.reset_parameters()
+        for conv in self.down_convs:
+            conv.reset_parameters()
+        for conv in self.up_convs:
+            conv.reset_parameters()
+
+    def forward(self, X):
+        x, edge_index, batch = X.x, X.edge_index, X.batch
+
+        x = self.initial_conv(x, edge_index)
+
+        if batch is None:
+            batch = edge_index.new_zeros(x.size(0))
+        edge_weight = x.new_ones(edge_index.size(1))
+
+        xs = [x]
+        edge_indices = [edge_index]
+        edge_weights = [edge_weight]
+        perms = []
+
+        for i in range(self.depth):
+            edge_index, edge_weight = self.augment_adj(edge_index, edge_weight,
+                                                       x.size(0))
+            x, edge_index, edge_weight, batch, perm = self.pools[i](
+                x, edge_index, edge_weight, batch)
+            x = self.act(self.down_convs[i](x, edge_index, edge_weight))
+
+            if i < self.depth - 1:
+                xs += [x]
+                edge_indices += [edge_index]
+                edge_weights += [edge_weight]
+            perms += [perm]
+
+        for i in range(self.depth):
+            j = self.depth - 1 - i
+
+            res = xs[j]
+            edge_index = edge_indices[j]
+            edge_weight = edge_weights[j]
+            perm = perms[j]
+
+            up = torch.zeros_like(res)
+            up[perm] = x
+            x = res + up if self.sum_res else torch.cat((res, up), dim=-1)
+
+            if i < self.depth - 1:
+                x = self.act(self.up_convs[i](x, edge_index, edge_weight))
+
+        x = self.final_conv(x, edge_index)
+
+        X.x = x
+
+        return X, None
+
+    def augment_adj(self, edge_index, edge_weight, num_nodes):
+        edge_index, edge_weight = add_self_loops(edge_index, edge_weight,
+                                                 num_nodes=num_nodes)
+        edge_index, edge_weight = sort_edge_index(edge_index, edge_weight,
+                                                  num_nodes)
+        edge_index, edge_weight = spspmm(edge_index, edge_weight, edge_index,
+                                         edge_weight, num_nodes, num_nodes,
+                                         num_nodes)
+        edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
+        return edge_index, edge_weight
+
+    def __repr__(self):
+        return '{}({}, depth={}, pool_ratios={})'.format(
+            self.__class__.__name__, self.channels, self.depth,
+            self.pool_ratios)

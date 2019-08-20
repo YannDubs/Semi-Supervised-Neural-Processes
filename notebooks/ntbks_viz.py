@@ -13,17 +13,21 @@ DFLT_FIGSIZE = (11, 5)
 
 
 def plot_dataset_samples(dataset, n_samples=50, title="Dataset",
-                         figsize=DFLT_FIGSIZE):
+                         figsize=DFLT_FIGSIZE, ax=None):
     """Plot `n_samples` samples of the a datset."""
-    plt.figure(figsize=figsize)
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+
     alpha = 1 / (n_samples + 1)**0.5
 
     for i in range(n_samples):
         x, y = dataset[i]
         x = rescale_range(x, (-1, 1), dataset.min_max)
-        plt.plot(x.numpy(), y.numpy(), c='b', alpha=alpha)
-        plt.xlim(*dataset.min_max)
-    plt.title(title, fontsize=14)
+        ax.plot(x.numpy(), y.numpy(), c='b', alpha=alpha)
+        ax.xlim(*dataset.min_max)
+
+    if title is not None:
+        ax.set_title(title, fontsize=14)
 
 
 def _rescale_ylim(y_min, y_max):
@@ -143,7 +147,7 @@ def plot_posterior_predefined_cntxt(model,
 
         if i == 0:
             ax.plot(X_trgt_plot, mean_y, alpha=alpha, c=mean_color,
-                    label="{} Predictions".format(model_label))
+                    label="{}'s predictions".format(model_label))
         else:
             ax.plot(X_trgt_plot, mean_y, alpha=alpha, c=mean_color)
 

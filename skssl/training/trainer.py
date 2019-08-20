@@ -72,7 +72,7 @@ class NeuralNetEstimator(skorch.NeuralNet):
                  batch_size=128,
                  **kwargs):
 
-        self._is_frozen = False
+        #self._is_frozen = False
 
         # uses cuda if available by defualt
         if device == "gpu":
@@ -101,7 +101,7 @@ class NeuralNetEstimator(skorch.NeuralNet):
         return self
 
     def fit(self, X, y=None, **fit_params):
-        if self._is_frozen:
+        if hasattr(self, "_is_frozen") and self._is_frozen:
             if self.verbose > 0:
                 warnings.warn("Skipping fitting because froze etimator.")
             return self

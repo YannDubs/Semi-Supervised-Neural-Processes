@@ -1,5 +1,7 @@
 import math
 from functools import partial
+from copy import deepcopy
+import warnings
 
 import torch
 import torch.nn as nn
@@ -7,7 +9,7 @@ import torch.nn.functional as F
 from torch.distributions.independent import Independent
 from torch.distributions import Normal
 import torch_geometric
-from torch_geometric.nn import GINConv
+from torch_geometric.nn import GINConv, GCNConv
 
 from skssl.utils.torchextend import make_depth_sep_conv, make_abs_conv
 from skssl.utils.initialization import weights_init, init_param_
@@ -15,7 +17,7 @@ from skssl.utils.torchextend import min_max_scale, MultivariateNormalDiag
 from skssl.utils.helpers import mask_featurize, input_to_graph
 from skssl.predefined import (merge_flat_input, discard_ith_arg, SetConv, GaussianRBF,
                               RelativeSinusoidalEncodings, MLP, UnetCNN, get_attender,
-                              GCN)
+                              GCN, UnetGCN)
 
 from .datasplit import CntxtTrgtGetter
 
@@ -850,11 +852,11 @@ class GraphConvNeuralProcess(GridConvNeuralProcess):
                  y_dim,
                  activation=relu_graph,
                  is_one_density=True,
-                 Conv=lambda y_dim: GINConv(nn.Identity(), eps=1.),
-                 TmpSelfAttn=partial(GCN, eps=1., train_eps=True,
-                                     Conv=lambda i, o, **kw: GINConv(MLP(i, o,
-                                                                         n_hidden_layers=1),
-                                                                     **kw)),
+                 Conv=lambda y_dim: GINConv(nn.Identity(), eps=1., train_eps=True),
+                 TmpSelfAttn=partial(UnetGCN,
+                                     n_layers=5,
+                                     is_sum_res=True,
+                                     Conv=partial(GCNConv, improved=True)),
                  **kwargs):
         super().__init__(y_dim,
                          activation=activation,
@@ -867,13 +869,24 @@ class GraphConvNeuralProcess(GridConvNeuralProcess):
 
     def classify(self, data, mask_context, summary):
         if self.is_clf_features:
-            x_cntxt = data.x[mask_context]
-            batch_cntxt = data.batch[mask_context] if data.batch is not None else None
-            pred_logits = self.classifier(torch.cat(
-                [torch_geometric.nn.global_mean_pool(x_cntxt, batch_cntxt),
-                 torch_geometric.nn.global_max_pool(x_cntxt, batch_cntxt),
-                 torch_geometric.nn.global_max_pool(-x_cntxt, batch_cntxt),
-                 summary], dim=-1))
+            x_cntxt = data.x[mask_context.squeeze(-1), :]
+            batch_cntxt = data.batch[mask_context.squeeze(-1)] if data.batch is not None else None
+
+            try:
+                pred_logits = self.classifier(torch.cat(
+                    [torch_geometric.nn.global_mean_pool(x_cntxt, batch_cntxt),
+                     torch_geometric.nn.global_max_pool(x_cntxt, batch_cntxt),
+                     torch_geometric.nn.global_max_pool(-x_cntxt, batch_cntxt),
+                     summary], dim=-1))
+            except Exception as e:
+                warnings.warn("Error occured in clasiffiy. summary.shape={}, mean.shape={}".format(summary.shape, torch_geometric.nn.global_mean_pool(x_cntxt, batch_cntxt).shape))
+                zeros = torch.zeros_like(summary)
+                pred_logits = self.classifier(torch.cat(
+                    [zeros[:, :x_cntxt.size(-1)],
+                     zeros[:, :x_cntxt.size(-1)],
+                     zeros[:, :x_cntxt.size(-1)],
+                     summary], dim=-1))
+
         else:
             pred_logits = self.classifier(summary)
         return pred_logits
@@ -889,6 +902,8 @@ class GraphConvNeuralProcess(GridConvNeuralProcess):
 
         out, density = out[..., :-1], out[..., -1:]
         out = self._density_normalize_concat(out, density)
+
+        data = deepcopy(data)
 
         data.x = self.resizer(out)
 

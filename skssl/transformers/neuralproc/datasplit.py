@@ -3,6 +3,7 @@ import functools
 
 import torch
 import numpy as np
+from sklearn.model_selection import train_test_split
 
 from skssl.utils.helpers import ratio_to_int, prod, indep_shuffle_
 
@@ -73,14 +74,27 @@ class GetRandomIndcs:
         self.is_batch_repeat = is_batch_repeat
         self.range_indcs = range_indcs
 
-    def __call__(self, batch_size, n_possible_points):
+    def __call__(self, batch_size, n_possible_points, stratify=None):
         if self.range_indcs is not None:
             n_possible_points = self.range_indcs[1] - self.range_indcs[0]
 
         min_n_indcs = ratio_to_int(self.min_n_indcs, n_possible_points)
         max_n_indcs = ratio_to_int(self.max_n_indcs, n_possible_points)
-        # make sure select at least 1
-        n_indcs = random.randint(max(1, min_n_indcs), max(1, max_n_indcs))
+        # make sure select at least 2
+        n_indcs = random.randint(max(2, min_n_indcs), max(2, max_n_indcs))
+
+        if stratify is not None:
+            # make sure at least 3 in each stratification  (if not for graph might break)
+            n_strat = int(max(stratify)) + 1
+            n_indcs = max(n_indcs, n_strat * 3)
+            n_indcs = min(n_indcs, n_possible_points - n_strat * 1)
+
+            # assume single batch
+            indcs, _ = train_test_split(np.arange(n_possible_points),
+                                        stratify=stratify,
+                                        train_size=n_indcs)
+            indcs = torch.from_numpy(indcs)
+            return indcs.unsqueeze(0)
 
         if self.is_batch_repeat:
             indcs = torch.randperm(n_possible_points)[:n_indcs]
@@ -127,17 +141,20 @@ class CntxtTrgtGetter:
                  targets_getter=get_all_indcs,
                  is_add_cntxts_to_trgts=True,
                  is_rm_cntxts_from_trgts=False,
-                 is_grided=False):
+                 is_grided=False,
+                 is_stratify=False):
         self.contexts_getter = contexts_getter
         self.targets_getter = targets_getter
         self.is_add_cntxts_to_trgts = is_add_cntxts_to_trgts
         self.is_rm_cntxts_from_trgts = is_rm_cntxts_from_trgts
+        self.is_stratify = is_stratify
         assert not(self.is_add_cntxts_to_trgts and self.is_rm_cntxts_from_trgts)
 
         # temporary args that can be changed without chaning the real ones (tmp)
         self.tmp_args = dict()
 
-    def __call__(self, X, y=None, context_indcs=None, target_indcs=None, is_grided=False):
+    def __call__(self, X, y=None, context_indcs=None, target_indcs=None,
+                 is_grided=False, stratify=None):
         """
         Parameters
         ----------
@@ -165,7 +182,10 @@ class CntxtTrgtGetter:
         batch_size, num_points = self.getter_inputs(X)
 
         if context_indcs is None:
-            context_indcs = contexts_getter(batch_size, num_points)
+            if self.is_stratify:
+                context_indcs = contexts_getter(batch_size, num_points, stratify=stratify)
+            else:
+                context_indcs = contexts_getter(batch_size, num_points)
         if target_indcs is None:
             target_indcs = targets_getter(batch_size, num_points)
 

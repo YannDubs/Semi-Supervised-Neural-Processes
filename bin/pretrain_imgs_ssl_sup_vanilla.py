@@ -20,7 +20,7 @@ from utils.data.helpers import train_dev_split
 from skorch.callbacks import EarlyStopping
 
 svhn_train, _, svhn_test = get_train_dev_test_ssl("svhn", dev_size=0)
-cifar10_train, _, cifar10_test = get_train_dev_test_ssl("cifar10", dev_size=0)
+#cifar10_train, _, cifar10_test = get_train_dev_test_ssl("cifar10", dev_size=0)
 mnist_train, _, mnist_test = get_train_dev_test_ssl("mnist", dev_size=0)
 
 from skssl.transformers.neuralproc.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
@@ -78,13 +78,13 @@ def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False, is_grided=False):
 
 
 datasets = dict(svhn=(svhn_train, svhn_test),
-                cifar10=(cifar10_train, cifar10_test),
+                #cifar10=(cifar10_train, cifar10_test),
                 mnist=(mnist_train, mnist_test)
                 )
 
 
 data_specific_kwargs = dict(svhn=dict(y_dim=svhn_train.shape[0]),
-                            cifar10=dict(y_dim=cifar10_train.shape[0]),
+                            # cifar10=dict(y_dim=cifar10_train.shape[0]),
                             mnist=dict(y_dim=mnist_train.shape[0]))
 
 X_DIM = 2  # 2D spatial input
@@ -202,7 +202,7 @@ for data_name, (data_train, data_test) in datasets.items():
 
     load_pretrained_(models, data_name, datasets, data_specific_kwargs)
 
-    is_all_labels = True
+    is_all_labels = False
 
     data_train, _, data_test = get_train_dev_test_ssl(data_name,
                                                       dev_size=0,
@@ -225,9 +225,9 @@ for data_name, (data_train, data_test) in datasets.items():
     else:
         sfx_ssl = ""
 
-    n_max_elements = 1024
+    n_max_elements = None
 
-    label_perc = (data_train.targets != -1).sum() / len(data_train.targets)
+    label_perc = None  # (data_train.targets != -1).sum() / len(data_train.targets)
     sfx_lab_perc = "" if label_perc is None else "_labperc"
 
     from skssl.utils.helpers import HyperparameterInterpolator
@@ -235,15 +235,15 @@ for data_name, (data_train, data_test) in datasets.items():
     get_lambda_clf = HyperparameterInterpolator(1, 50, N_EPOCHS * n_steps_per_epoch, mode="linear")
 
     data_trainers.update(train_models_({data_name: (data_train, data_test)},
-                                       {k + "_finetune_is_all_labels": m for k, m in models.items()
+                                       {k + "_finetune_noscale": m for k, m in models.items()
                                         if "ssl_classifier" in k},
                                        criterion=partial(GridNeuralProcessSSLLoss,
                                                          n_max_elements=n_max_elements,
                                                          label_perc=label_perc,
-                                                         is_ssl_only=False,
+                                                         is_ssl_only=is_ssl_only,
                                                          get_lambda_unsup=lambda: 1,
                                                          get_lambda_ent=lambda: 0.5,
-                                                         get_lambda_sup=lambda: get_lambda_clf(True),
+                                                         get_lambda_sup=lambda: 1,
                                                          get_lambda_neg_cons=lambda: 0.5,
                                                          min_sigma=0.1
                                                          ),
@@ -267,7 +267,5 @@ for k, t in data_trainers.items():
                   "val_loss:", h["valid_loss"],
                   "val_acc:", h["valid_acc"])
             break
-
-print("finetune_sup")
 
 data_trainers = {}
