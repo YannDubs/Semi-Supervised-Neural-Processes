@@ -1,9 +1,13 @@
 h5py
 skorch
-torch
 torchvision
 matplotlib
 tqdm
 scikit-learn
 joblib
--e git://github.com/YannDubs/scikit-optimize.git#egg=scikit-optimize
+hydra
+tensorboard
+torch-scatter 
+torch-sparse 
+torch-cluster 
+torch-geometric

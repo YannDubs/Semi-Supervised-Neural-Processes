@@ -1,0 +1,6 @@
+encoder:
+  name: mlp
+
+  architecture:
+    hidden_size: [1024,1024]
+    dropout: ${model.dropout}

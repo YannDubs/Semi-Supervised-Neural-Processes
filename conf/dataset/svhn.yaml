@@ -1,0 +1,4 @@
+dataset:
+  name: svhn
+  n_classes: 10
+  shape: [3,32,32]

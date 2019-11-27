@@ -1,0 +1,7 @@
+dataset:
+  n_labels: [-1] # how much of before to use as labelled
+  valid_size: 0.1
+
+  kwargs:
+    is_augment: True
+    is_return_index: ${model.architecture.is_pred_index}

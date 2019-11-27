@@ -6,7 +6,7 @@ import h5py
 from torch.utils.data import Dataset
 import torch
 
-from skssl.utils.helpers import indep_shuffle_, ratio_to_int
+from econvcnp.utils.helpers import indep_shuffle_, ratio_to_int
 
 PATHS = {"physionet2012": "data/Physionet2012/data.hdf5"}
 DATASETS = list(PATHS.keys())

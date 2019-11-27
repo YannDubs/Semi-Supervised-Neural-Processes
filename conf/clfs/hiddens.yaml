@@ -1,0 +1,2 @@
+clfs:
+  nhiddens: [128,32,512] # first is default

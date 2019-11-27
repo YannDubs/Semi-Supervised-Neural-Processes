@@ -1,0 +1,6 @@
+encoder:
+  name: resnet34
+
+  architecture:
+    pretrained: False
+    

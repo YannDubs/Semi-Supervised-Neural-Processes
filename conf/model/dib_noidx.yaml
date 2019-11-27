@@ -1,0 +1,12 @@
+model:
+  name: dib_noidx
+  
+  architecture:
+    is_stochastic: True
+    zx_nlayers: ${clfs.nlayers.0}
+
+  loss:
+    beta: 0.0000001
+    regularization_loss: "DI_F[Z->N]"
+
+  

@@ -1,0 +1,9 @@
+experiment: ??
+mode: table # tables,barplots,losses,heatmaps
+
+kwargs:
+  base_dir: /private/home/yannd/projects/Conditional-Information/
+  pattern: tmp_results/${experiment}/**/score.csv
+  save_dir: ${kwargs.base_dir}results/${experiment}/
+  metrics: ["acc"]
+  aggregate: ["mean","std"]

@@ -1,0 +1,13 @@
+model:
+  name: dib
+  
+  architecture:
+    is_stochastic: True
+    zx_nlayers: ${clfs.nlayers.0}
+    is_pred_index: True
+
+  loss:
+    beta: 0.055 # will get rescaled by log(N)
+    regularization_loss: "DI_F[Z->X]"
+
+  

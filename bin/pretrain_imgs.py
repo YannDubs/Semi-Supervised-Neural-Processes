@@ -18,12 +18,12 @@ from utils.data.ssldata import get_dataset, get_train_dev_test_ssl
 from utils.data.helpers import train_dev_split
 
 
-from skssl.transformers.neuralproc.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
+from econvcnp.transformers.neuralproc.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
 from utils.data.tsdata import get_timeseries_dataset, SparseMultiTimeSeriesDataset
 
-from skssl.transformers import AttentiveNeuralProcess, NeuralProcessLoss, GridConvNeuralProcess, GridNeuralProcessLoss
-from skssl.predefined import UnetCNN, CNN, SelfAttention, MLP, SinusoidalEncodings, merge_flat_input
-from skssl.transformers.neuralproc.datasplit import precomputed_cntxt_trgt_split
+from econvcnp.transformers import AttentiveNeuralProcess, NeuralProcessLoss, GridConvNeuralProcess, GridNeuralProcessLoss
+from econvcnp.predefined import UnetCNN, CNN, SelfAttention, MLP, SinusoidalEncodings, merge_flat_input
+from econvcnp.transformers.neuralproc.datasplit import precomputed_cntxt_trgt_split
 
 
 def cntxt_trgt_collate(get_cntxt_trgt, is_repeat_batch=False, is_grided=False):

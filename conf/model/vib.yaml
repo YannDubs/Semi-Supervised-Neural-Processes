@@ -1,0 +1,9 @@
+model:
+  name: vib
+  
+  architecture:
+    is_stochastic: True
+
+  loss:
+    beta: 0.001
+    regularization_loss: "I[Z;X]"

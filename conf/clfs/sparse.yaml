@@ -1,0 +1,5 @@
+clfs:
+  # make very large model to have a lot to prune out
+  nhiddens: [1024] 
+  nlayers: [5] 
+  kprune: [0,1,2,3,4] # first is default 

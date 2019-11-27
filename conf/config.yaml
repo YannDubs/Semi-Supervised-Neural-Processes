@@ -1,0 +1,116 @@
+defaults:
+  - hydra/launcher : submitit
+  - hydra/job_logging: colorlog
+  - hydra/hydra_logging: colorlog
+
+  - dataset: default
+  - dataset: mnist
+
+  - encoder: wideresnet
+
+  - model : default
+  - model : dib
+
+  - clfs : default
+  - clfs : default 
+
+  - datasize : small
+
+# GENERAL
+paths:
+  base_dir: /private/home/yannd/projects/Conditional-Information/
+  name: ${experiment}/{hyperparam_names}/run_${run}/ # cannot start directly by {}
+  chckpnt_dirnames: 
+    - ${paths.base_dir}tmp_results/${paths.name}
+    - .
+  tensorboard_base_dir : ${paths.base_dir}tensorboard/
+  tensorboard_curr_dir : ${paths.tensorboard_base_dir}${paths.name}
+  
+experiment: ???
+run: 0
+seed: 123 
+device: cuda
+csv_score_pattern: "{epoch},{loss},{mode},{score}"
+
+# Training
+train:
+  is_train_trnsf: true
+  is_train_clfs: true
+  scheduling_factor: 100 # by how much to reduce learning rate during training
+  gamma: none 
+
+  kwargs: # kwargs for both transformer and classifier
+    lr: 0.001
+    iterator_train__shuffle: true
+    iterator_valid__shuffle: false
+    max_epochs: ${datasize.max_epochs}
+    batch_size: ${datasize.batch_size}
+    is_continue_train: True # should be true if fairtask or when submitit will allow checkpoittin
+    is_progressbar: false
+    device: ${device}
+    seed: ${seed}
+
+# HYPERPARAMETERS TO LOG (in order)
+# if you add something here you should run `python add_hyperparam.py` **before** changing the default of that value
+# this will rearange the results and tensorboard folder by saving the previous models under the correct hyperparameter
+hyperparameters:
+  data: ${dataset.name}
+  datasize: ${datasize.name}
+  model: ${model.name}
+  rep: ${encoder.name}
+  rep_zy_nhid: ${model.architecture.zy_nhiddens}
+  rep_zy_nlay: ${model.architecture.zy_nlayers}
+  rep_zy_kpru: ${model.architecture.zy_kprune}
+  rep_zx_nhid: ${model.architecture.zx_nhiddens}
+  rep_zx_nlay: ${model.architecture.zx_nlayers}
+  rep_zx_kpru: ${model.architecture.zx_kprune}
+  beta: ${model.loss.beta}
+
+keys_ignored: 
+      - train_diG_zx
+      - train_H_x
+      - train_H_g_xz
+      - train_I_zx
+      - train_H_z
+      - train_H_zx
+      - train_diF_zy
+      - train_H_y
+      - train_H_f_yz
+      - train_H_f_yz
+      - valid_H_x
+      - valid_H_g_xz
+      - valid_I_zx
+      - valid_H_z
+      - valid_H_zx
+      - valid_diF_zy
+      - valid_H_y
+      - valid_H_f_yz
+
+hydra:
+    launcher:
+        mem_limit: 32
+        time: 1440 # 24 hours
+        ngpus: 1
+        ntasks: 1
+        ncpus_task: 10 
+        partition: learnfair # scavenge, dev
+
+        class: hydra_plugins.submitit.SubmititLauncher
+        params:
+            queue: slurm
+
+            folder: ${hydra.sweep.dir}/.${hydra.launcher.params.queue}
+
+            queue_parameters:
+              # slurm queue parameters
+              slurm:
+                num_gpus: ${hydra.launcher.ngpus}
+                ntasks_per_node: ${hydra.launcher.ntasks} # number of tasks on single machine
+                mem: ${hydra.launcher.mem_limit}GB
+                cpus_per_task: ${hydra.launcher.ncpus_task} 
+                time: ${hydra.launcher.time}
+                partition: ${hydra.launcher.partition}
+                # constraint="volta32gb" # pascal | volta | volta32gb
+                nodes: 1 
+                signal_delay_s: 120
+                job_name: ${hydra.job.name}

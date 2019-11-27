@@ -1,0 +1,4 @@
+clfs:
+  nhiddens: [128] 
+  nlayers: [2] 
+  kprune: [0] 

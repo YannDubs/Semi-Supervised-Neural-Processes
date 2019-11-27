@@ -1,0 +1,26 @@
+model:
+  dropout: 0
+
+  architecture:
+    n_classes: ${dataset.n_classes}
+    x_shape: ${dataset.shape}
+    z_dim: 256 
+    is_stochastic: False
+    zy_kprune: ${clfs.kprune.0} # 0
+    zx_kprune: ${clfs.kprune.0}
+    zy_nlayers: ${clfs.nlayers.0} # 2
+    zx_nlayers: -1 # defult don't use zx
+    zy_nhiddens: ${clfs.nhiddens.0} #128
+    zx_nhiddens: ${clfs.nhiddens.0} #128
+    is_pred_index: False
+    n_samples_train: 12  # sample many examples during training and test to compute expectation over z
+    n_samples_test: 12  # sample many examples during training and test to compute expectation over z
+
+  loss:
+    beta: 0
+    regularization_loss : none
+    H_x : none
+    H_n : none
+  
+
+  

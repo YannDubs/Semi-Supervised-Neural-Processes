@@ -9,13 +9,13 @@ from sklearn.pipeline import Pipeline
 import skorch
 from skorch.callbacks import ProgressBar, Checkpoint, TrainEndCheckpoint, EarlyStopping
 
-from skssl.training import NeuralNetEstimator, NeuralNetClassifier, NeuralNetTransformer
-from skssl.training.loaders import get_supervised_iterator
-from skssl.transformers import VAE, VAELoss
-from skssl.predefined import (WideResNet, ReversedWideResNet, ReversedSimpleCNN,
+from econvcnp.training import NeuralNetEstimator, NeuralNetClassifier, NeuralNetTransformer
+from econvcnp.training.loaders import get_supervised_iterator
+from econvcnp.transformers import VAE, VAELoss
+from econvcnp.predefined import (WideResNet, ReversedWideResNet, ReversedSimpleCNN,
                               SimpleCNN, MLP, merge_flat_input)
-from skssl.classifiers import SSLVAELoss, SSLVAE, SSLAuxVAELoss, SSLAuxVAE
-from skssl.training.helpers import FixRandomSeed
+from econvcnp.classifiers import SSLVAELoss, SSLVAE, SSLAuxVAELoss, SSLAuxVAE
+from econvcnp.training.helpers import FixRandomSeed
 from utils.data.ssldata import get_dataset, get_train_dev_test_ssl
 from utils.helpers import FormatterNoDuplicate
 
@@ -62,7 +62,7 @@ def _pretrained_vae(dataset,
         Number of latent dimensions.
 
     enc_dec: {"mlp","resnet","cnn","resnetEnc_cnnDec"}, optional
-        Type of encoder and decoder. Models are defined in `skssl.predefined`
+        Type of encoder and decoder. Models are defined in `econvcnp.predefined`
 
     kwargs:
         Additional argumens to `_predefined_base`
@@ -147,7 +147,7 @@ def _pretrained_sslvae(dataset,
 
     transf_dec: {"mlp","resnet","cnn","resnetEnc_cnnDec"}, optional
         Type of transformer and decoder. Models are defined in
-        `skssl.predefined`.
+        `econvcnp.predefined`.
 
     kwargs:
         Additional argumens to `_predefined_base`

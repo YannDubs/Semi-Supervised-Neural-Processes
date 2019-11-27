@@ -1,0 +1,7 @@
+dataset:
+  name: mnist
+  n_classes: 10
+  shape: [1,32,32]
+
+  kwargs:
+    is_augment: False
