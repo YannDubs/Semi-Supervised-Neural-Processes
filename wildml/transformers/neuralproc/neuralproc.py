@@ -11,11 +11,11 @@ from torch.distributions import Normal
 import torch_geometric
 from torch_geometric.nn import GINConv, GCNConv
 
-from econvcnp.utils.torchextend import make_depth_sep_conv, make_abs_conv
-from econvcnp.utils.initialization import weights_init, init_param_
-from econvcnp.utils.torchextend import min_max_scale, MultivariateNormalDiag
-from econvcnp.utils.helpers import mask_featurize, input_to_graph
-from econvcnp.predefined import (merge_flat_input, discard_ith_arg, SetConv, GaussianRBF,
+from wildml.utils.torchextend import make_depth_sep_conv, make_abs_conv
+from wildml.utils.initialization import weights_init, init_param_
+from wildml.utils.torchextend import min_max_scale, MultivariateNormalDiag
+from wildml.utils.helpers import mask_featurize, input_to_graph
+from wildml.predefined import (merge_flat_input, discard_ith_arg, SetConv, GaussianRBF,
                               RelativeSinusoidalEncodings, MLP, UnetCNN, get_attender,
                               GCN, UnetGCN)
 

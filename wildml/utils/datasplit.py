@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from econvcnp.utils.helpers import ratio_to_int, prod, indep_shuffle_
+from wildml.utils.helpers import ratio_to_int, prod, indep_shuffle_
 
 
 def precomputed_cntxt_trgt_split(X_cntxt, y_cntxt, X_trgt, y_trgt, **kwargs):
@@ -64,11 +64,7 @@ class GetRandomIndcs:
         Range tuple (max, min) for the indices.
     """
 
-    def __init__(self,
-                 min_n_indcs=.1,
-                 max_n_indcs=.5,
-                 is_batch_repeat=False,
-                 range_indcs=None):
+    def __init__(self, min_n_indcs=0.1, max_n_indcs=0.5, is_batch_repeat=False, range_indcs=None):
         self.min_n_indcs = min_n_indcs
         self.max_n_indcs = max_n_indcs
         self.is_batch_repeat = is_batch_repeat
@@ -90,9 +86,9 @@ class GetRandomIndcs:
             n_indcs = min(n_indcs, n_possible_points - n_strat * 1)
 
             # assume single batch
-            indcs, _ = train_test_split(np.arange(n_possible_points),
-                                        stratify=stratify,
-                                        train_size=n_indcs)
+            indcs, _ = train_test_split(
+                np.arange(n_possible_points), stratify=stratify, train_size=n_indcs
+            )
             indcs = torch.from_numpy(indcs)
             return indcs.unsqueeze(0)
 
@@ -100,9 +96,11 @@ class GetRandomIndcs:
             indcs = torch.randperm(n_possible_points)[:n_indcs]
             indcs = indcs.unsqueeze(0).expand(batch_size, n_indcs)
         else:
-            indcs = np.arange(n_possible_points
-                              ).reshape(1, n_possible_points
-                                        ).repeat(batch_size, axis=0)
+            indcs = (
+                np.arange(n_possible_points)
+                .reshape(1, n_possible_points)
+                .repeat(batch_size, axis=0)
+            )
             indep_shuffle_(indcs, -1)
             indcs = torch.from_numpy(indcs[:, :n_indcs])
 
@@ -136,25 +134,28 @@ class CntxtTrgtGetter:
         trgt will be due to radnomness.
     """
 
-    def __init__(self,
-                 contexts_getter=GetRandomIndcs(),
-                 targets_getter=get_all_indcs,
-                 is_add_cntxts_to_trgts=True,
-                 is_rm_cntxts_from_trgts=False,
-                 is_grided=False,
-                 is_stratify=False):
+    def __init__(
+        self,
+        contexts_getter=GetRandomIndcs(),
+        targets_getter=get_all_indcs,
+        is_add_cntxts_to_trgts=True,
+        is_rm_cntxts_from_trgts=False,
+        is_grided=False,
+        is_stratify=False,
+    ):
         self.contexts_getter = contexts_getter
         self.targets_getter = targets_getter
         self.is_add_cntxts_to_trgts = is_add_cntxts_to_trgts
         self.is_rm_cntxts_from_trgts = is_rm_cntxts_from_trgts
         self.is_stratify = is_stratify
-        assert not(self.is_add_cntxts_to_trgts and self.is_rm_cntxts_from_trgts)
+        assert not (self.is_add_cntxts_to_trgts and self.is_rm_cntxts_from_trgts)
 
         # temporary args that can be changed without chaning the real ones (tmp)
         self.tmp_args = dict()
 
-    def __call__(self, X, y=None, context_indcs=None, target_indcs=None,
-                 is_grided=False, stratify=None):
+    def __call__(
+        self, X, y=None, context_indcs=None, target_indcs=None, is_grided=False, stratify=None
+    ):
         """
         Parameters
         ----------
@@ -172,10 +173,12 @@ class CntxtTrgtGetter:
             Indices of the target points. If `None` generates it using
             `contexts_getter(batch_size, num_points)`.
         """
-        is_add_cntxts_to_trgts = self.tmp_args.get("is_add_cntxts_to_trgts",
-                                                   self.is_add_cntxts_to_trgts)
-        is_rm_cntxts_from_trgts = self.tmp_args.get("is_rm_cntxts_from_trgts",
-                                                    self.is_rm_cntxts_from_trgts)
+        is_add_cntxts_to_trgts = self.tmp_args.get(
+            "is_add_cntxts_to_trgts", self.is_add_cntxts_to_trgts
+        )
+        is_rm_cntxts_from_trgts = self.tmp_args.get(
+            "is_rm_cntxts_from_trgts", self.is_rm_cntxts_from_trgts
+        )
         contexts_getter = self.tmp_args.get("contexts_getter", self.contexts_getter)
         targets_getter = self.tmp_args.get("targets_getter", self.targets_getter)
 
@@ -223,8 +226,9 @@ class CntxtTrgtGetter:
         n_indcs = targets_mask.sum(dim=1).min()  # use minimum indcs
 
         # slow
-        target_indcs = torch.stack([torch.nonzero(targets_mask[i, :]).squeeze()[:n_indcs]
-                                    for i in range(batch_size)])
+        target_indcs = torch.stack(
+            [torch.nonzero(targets_mask[i, :]).squeeze()[:n_indcs] for i in range(batch_size)]
+        )
 
         return target_indcs.to(target_indcs.device)
 
@@ -273,15 +277,11 @@ class RandomMasker(GetRandomIndcs):
         Whether to use use the same indices for all elements in the batch.
     """
 
-    def __init__(self,
-                 min_nnz=.1,
-                 max_nnz=.5,
-                 is_batch_repeat=False):
-        super().__init__(min_n_indcs=min_nnz,
-                         max_n_indcs=max_nnz,
-                         is_batch_repeat=is_batch_repeat)
+    def __init__(self, min_nnz=0.1, max_nnz=0.5, is_batch_repeat=False):
+        super().__init__(min_n_indcs=min_nnz, max_n_indcs=max_nnz, is_batch_repeat=is_batch_repeat)
 
     def __call__(self, batch_size, mask_shape, **kwargs):
+
         n_possible_points = prod(mask_shape)
         nnz_indcs = super().__call__(batch_size, n_possible_points, **kwargs)
 
@@ -349,13 +349,8 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
         Additional arguments to `CntxtTrgtGetter`.
     """
 
-    def __init__(self,
-                 context_masker=RandomMasker(),
-                 target_masker=no_masker,
-                 **kwargs):
-        super().__init__(contexts_getter=context_masker,
-                         targets_getter=target_masker,
-                         **kwargs)
+    def __init__(self, context_masker=RandomMasker(), target_masker=no_masker, **kwargs):
+        super().__init__(contexts_getter=context_masker, targets_getter=target_masker, **kwargs)
 
     def __call__(self, X, y=None, context_mask=None, target_mask=None, **kwargs):
         """
@@ -380,10 +375,7 @@ class GridCntxtTrgtGetter(CntxtTrgtGetter):
             be same for all batch. If `None` generates it using
             `target_masker(batch_size, mask_shape)`.
         """
-        return super().__call__(X,
-                                context_indcs=context_mask,
-                                target_indcs=target_mask,
-                                **kwargs)
+        return super().__call__(X, context_indcs=context_mask, target_indcs=target_mask, **kwargs)
 
     def add_cntxts_to_trgts(self, grid_shape, target_mask, context_mask):
         """Add context points to targets: has been shown emperically better."""

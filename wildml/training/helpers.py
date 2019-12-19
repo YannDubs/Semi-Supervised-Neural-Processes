@@ -5,7 +5,7 @@ import torch
 
 from skorch.callbacks import Callback
 
-from essl.utils.helpers import cont_tuple_to_tuple_cont, ratio_to_int, set_seed
+from wildml.utils.helpers import cont_tuple_to_tuple_cont, ratio_to_int, set_seed
 
 
 class FixRandomSeed(Callback):

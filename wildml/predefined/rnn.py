@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from econvcnp.utils.initialization import weights_init
+from wildml.utils.initialization import weights_init
 
 __all__ = ["RNN"]
 

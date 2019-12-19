@@ -1,9 +1,32 @@
-experiment: ??
-mode: table # tables,barplots,losses,heatmaps
+defaults:
+  - hydra/job_logging: colorlog
+  - hydra/hydra_logging: colorlog
+  
+experiment: ???
+mode: [save_tables, plot_metrics, plot_histories] # barplots,losses,heatmaps
 
-kwargs:
+
+kwargs:  
+  save_dir: ${recolt_data.base_dir}results/${experiment}/
+
+recolt_data:
   base_dir: /private/home/yannd/projects/Conditional-Information/
-  pattern: tmp_results/${experiment}/**/score.csv
-  save_dir: ${kwargs.base_dir}results/${experiment}/
-  metrics: ["acc"]
-  aggregate: ["mean","std"]
+  pattern_results: tmp_results/${experiment}/**/score.csv
+  pattern_histories: tmp_results/${experiment}/**/transformer/last_epoch_history.json
+  metrics: ["acc","top5_acc","loss"]
+
+plot_metrics:
+  x: ???
+  style: null
+  is_merge_data_size: true
+  folder_col: null
+  col: null # only if is_merge_data_size
+
+plot_histories :
+  style: null
+  is_merge_data_size: true
+  folder_col: null
+  col: null # only if is_merge_data_size
+  
+  
+

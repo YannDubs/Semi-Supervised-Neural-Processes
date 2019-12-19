@@ -6,11 +6,11 @@ arXiv preprint arXiv:1602.05473 (2016).
 """
 import torch
 
-from econvcnp.predefined import MLP, WideResNet, ReversedWideResNet, merge_flat_input
-from econvcnp.utils.initialization import weights_init
-from econvcnp.utils.torchextend import kl_normal_loss
-from econvcnp.utils.helpers import HyperparameterInterpolator
-from econvcnp.training.helpers import split_labelled_unlabelled
+from wildml.predefined import MLP, WideResNet, ReversedWideResNet, merge_flat_input
+from wildml.utils.initialization import weights_init
+from wildml.utils.torchextend import kl_normal_loss
+from wildml.utils.helpers import HyperparameterInterpolator
+from wildml.training.helpers import split_labelled_unlabelled
 from .sslvae import SSLVAELoss, SSLVAE
 
 __all__ = ['SSLAuxVAELoss', 'SSLAuxVAE']

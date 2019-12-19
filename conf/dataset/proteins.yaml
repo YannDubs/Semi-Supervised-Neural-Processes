@@ -1,0 +1,6 @@
+dataset:
+  name: proteins
+  n_classes: 2
+  n_train: 1001
+  type: graphs 
+

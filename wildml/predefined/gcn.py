@@ -9,7 +9,7 @@ from torch_geometric.utils import add_self_loops, remove_self_loops
 from torch_geometric.utils.repeat import repeat
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 
-from econvcnp.utils.initialization import weights_init
+from wildml.utils.initialization import weights_init
 
 __all__ = ["GCN", "UnetGCN", "GAT", "GraphUNet"]
 

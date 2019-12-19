@@ -15,12 +15,13 @@ model:
     is_pred_index: False
     n_samples_train: 12  # sample many examples during training and test to compute expectation over z
     n_samples_test: 12  # sample many examples during training and test to compute expectation over z
+    n_skip: 0
 
   loss:
     beta: 0
-    regularization_loss : none
-    H_x : none
-    H_n : none
+    regularization_loss : null
+    H_x_init : null
+    H_y_init : null
   
 
   

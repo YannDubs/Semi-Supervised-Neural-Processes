@@ -3,9 +3,9 @@ import math
 import torch.nn as nn
 import torch.nn.functional as F
 
-from econvcnp.utils.torchextend import ReversedConv2d, ReversedLinear
-from econvcnp.utils.helpers import (is_valid_image_shape, closest_power2)
-from econvcnp.utils.initialization import weights_init
+from wildml.utils.torchextend import ReversedConv2d, ReversedLinear
+from wildml.utils.helpers import (is_valid_image_shape, closest_power2)
+from wildml.utils.initialization import weights_init
 
 __all__ = ["WideResNet", "ReversedWideResNet"]
 

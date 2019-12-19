@@ -4,6 +4,8 @@ import warnings
 from functools import reduce
 import operator
 from types import SimpleNamespace
+import random
+import contextlib
 
 import torch
 from torch import nn
@@ -21,9 +23,9 @@ def input_to_graph(inp):
 
 
 def mask_featurize(funcs, X, mask):
-    return torch.stack([torch.cat([f(X[b][mask[b]])
-                                   for f in funcs])
-                        for b in range(X.size(0))], dim=0)
+    return torch.stack(
+        [torch.cat([f(X[b][mask[b]]) for f in funcs]) for b in range(X.size(0))], dim=0
+    )
 
 
 def mask_and_apply(x, mask, f):
@@ -35,7 +37,7 @@ def mask_and_apply(x, mask, f):
     expanded_mask = mask.expand(*mask.shape[:-1], x.size(-1))
     selected = x.masked_select(expanded_mask).view(-1, x.size(-1))
     # else:
-    #selected = x.masked_select(mask).view(-1, 1)
+    # selected = x.masked_select(mask).view(-1, 1)
     tranformed_selected = f(selected).squeeze(-1)
     return x[..., :1].masked_scatter(mask, tranformed_selected)
 
@@ -107,17 +109,25 @@ def is_valid_image_shape(shape, min_width=0, max_width=float("inf")):
     if shape[1] != shape[2]:
         warnings.warn("Framework not tested for not squared images ... Shape = {}".format(shape))
     if shape[1] > max_width:
-        warnings.warn("Model only tested for images `width <= {}` ... Shape = {}".format(max_width, shape))
+        warnings.warn(
+            "Model only tested for images `width <= {}` ... Shape = {}".format(max_width, shape)
+        )
     if shape[1] < min_width:
-        warnings.warn("Model only tested for images `width >= {}` ... Shape = {}".format(min_width, shape))
+        warnings.warn(
+            "Model only tested for images `width >= {}` ... Shape = {}".format(min_width, shape)
+        )
     if not is_power2(shape[1]):
-        warnings.warn("Framework not tested for images with width not power of 2 ... Shape = {}".format(shape))
+        warnings.warn(
+            "Framework not tested for images with width not power of 2 ... Shape = {}".format(
+                shape
+            )
+        )
 
 
 def closest_power2(n):
     """Return the closest power of 2 by checking whether the second binary number is a 1."""
     op = math.floor if bin(n)[3] != "1" else math.ceil
-    return 2**(op(math.log(n, 2)))
+    return 2 ** (op(math.log(n, 2)))
 
 
 def is_power2(num):
@@ -162,10 +172,15 @@ class HyperparameterInterpolator:
         Interpolation mode.
     """
 
-    def __init__(self, initial_value, final_value, n_steps_interpolate,
-                 start_step=0,
-                 default=None,
-                 mode="linear"):
+    def __init__(
+        self,
+        initial_value,
+        final_value,
+        n_steps_interpolate,
+        start_step=0,
+        default=None,
+        mode="linear",
+    ):
 
         self.initial_value = initial_value
         self.final_value = final_value
@@ -175,10 +190,10 @@ class HyperparameterInterpolator:
         self.mode = mode.lower()
 
         if self.mode == "linear":
-            delta = (self.final_value - self.initial_value)
+            delta = self.final_value - self.initial_value
             self.factor = delta / self.n_steps_interpolate
         elif self.mode == "geometric":
-            delta = (self.final_value / self.initial_value)
+            delta = self.final_value / self.initial_value
             self.factor = delta ** (1 / self.n_steps_interpolate)
         else:
             raise ValueError("Unkown mode : {}.".format(mode))
@@ -192,7 +207,8 @@ class HyperparameterInterpolator:
     @property
     def is_annealing(self):
         return (self.start_step <= self.n_training_calls) and (
-            self.n_training_calls <= (self.n_steps_interpolate + self.start_step))
+            self.n_training_calls <= (self.n_steps_interpolate + self.start_step)
+        )
 
     def __call__(self, is_update):
         """Return the current value of the hyperparameter.
@@ -213,7 +229,7 @@ class HyperparameterInterpolator:
         if self.is_annealing:
             current = self.initial_value
             if self.mode == "geometric":
-                current *= (self.factor ** n_actual_training_calls)
+                current *= self.factor ** n_actual_training_calls
             elif self.mode == "linear":
                 current += self.factor * n_actual_training_calls
         else:
@@ -229,3 +245,32 @@ def rescale_range(X, old_range, new_range):
     old_delta = old_range[1] - old_min
     new_delta = new_range[1] - new_min
     return (((X - old_min) * new_delta) / old_delta) + new_min
+
+
+def set_seed(seed):
+    """Set the random seed."""
+    if seed is not None:
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+
+
+@contextlib.contextmanager
+def tmp_seed(seed):
+    """Context manager to use a temporary random seed with `with` statement."""
+    np_state = np.random.get_state()
+    torch_state = torch.get_rng_state()
+    random_state = random.getstate()
+    if torch.cuda.is_available():
+        torch_cuda_state = torch.cuda.get_rng_state()
+
+    set_seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(np_state)
+        torch.set_rng_state(torch_state)
+        random.setstate(random_state)
+        if torch.cuda.is_available():
+            torch.cuda.set_rng_state(torch_cuda_state)

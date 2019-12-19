@@ -1,0 +1,8 @@
+dataset:
+  name: ag_news
+  n_classes: 4
+  type: texts 
+
+  kwargs:
+    ngrams: 2
+

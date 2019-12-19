@@ -23,7 +23,7 @@ svhn_train, _, svhn_test = get_train_dev_test_ssl("svhn", dev_size=0)
 #cifar10_train, _, cifar10_test = get_train_dev_test_ssl("cifar10", dev_size=0)
 mnist_train, _, mnist_test = get_train_dev_test_ssl("mnist", dev_size=0)
 
-from econvcnp.transformers.neuralproc.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
+from wildml.transformers.neuralproc.datasplit import GridCntxtTrgtGetter, RandomMasker, no_masker, half_masker
 from utils.data.tsdata import get_timeseries_dataset, SparseMultiTimeSeriesDataset
 
 get_cntxt_trgt_test = GridCntxtTrgtGetter(context_masker=RandomMasker(min_nnz=0.01, max_nnz=0.50),
@@ -94,9 +94,9 @@ N_TARGETS = 10
 #label_percentages = [N_TARGETS, N_TARGETS*2, 0.01, 0.05, 0.1, 0.3, 0.5, 1]
 
 
-from econvcnp.transformers import AttentiveNeuralProcess, GridNeuralProcessSSLLoss, GridConvNeuralProcess
-from econvcnp.predefined import UnetCNN, CNN, MLP, SinusoidalEncodings, merge_flat_input
-from econvcnp.transformers.neuralproc.datasplit import precomputed_cntxt_trgt_split
+from wildml.transformers import AttentiveNeuralProcess, GridNeuralProcessSSLLoss, GridConvNeuralProcess
+from wildml.predefined import UnetCNN, CNN, MLP, SinusoidalEncodings, merge_flat_input
+from wildml.transformers.neuralproc.datasplit import precomputed_cntxt_trgt_split
 from copy import deepcopy
 
 
@@ -169,7 +169,7 @@ BATCH_SIZE = 32
 IS_RETRAIN = True  # if false load precomputed
 chckpnt_dirname = "results/notebooks/neural_process_images/"
 
-from econvcnp.utils.helpers import HyperparameterInterpolator
+from wildml.utils.helpers import HyperparameterInterpolator
 
 
 def load_pretrained_(models, data_name, datasets, data_specific_kwargs):
@@ -230,7 +230,7 @@ for data_name, (data_train, data_test) in datasets.items():
     label_perc = None  # (data_train.targets != -1).sum() / len(data_train.targets)
     sfx_lab_perc = "" if label_perc is None else "_labperc"
 
-    from econvcnp.utils.helpers import HyperparameterInterpolator
+    from wildml.utils.helpers import HyperparameterInterpolator
     n_steps_per_epoch = len(data_train) // BATCH_SIZE
     get_lambda_clf = HyperparameterInterpolator(1, 50, N_EPOCHS * n_steps_per_epoch, mode="linear")
 

@@ -5,10 +5,10 @@ import torch.nn as nn
 from torch.distributions import Normal, Categorical, kl_divergence
 import torch_scatter
 
-from econvcnp.training.helpers import split_labelled_unlabelled
-from econvcnp.utils.torchextend import (hellinger_dist, jensen_shannon_div,
+from wildml.training.helpers import split_labelled_unlabelled
+from wildml.utils.torchextend import (hellinger_dist, jensen_shannon_div,
                                      min_jensen_shannon_div, total_var)
-from econvcnp.utils.helpers import input_to_graph
+from wildml.utils.helpers import input_to_graph
 
 __all__ = ["NeuralProcessLoss", "GridNeuralProcessLoss", "GraphNeuralProcessLoss",
            "GridNeuralProcessSSLLoss", "GraphNeuralProcessSSLLoss", "NeuralProcessSSLLoss"]

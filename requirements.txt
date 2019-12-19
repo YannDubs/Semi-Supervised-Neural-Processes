@@ -11,3 +11,7 @@ torch-scatter
 torch-sparse 
 torch-cluster 
 torch-geometric
+seaborn
+torchtext
+spacy
+h5py

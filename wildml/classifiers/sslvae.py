@@ -11,12 +11,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.base import ClassifierMixin, TransformerMixin
 
-from econvcnp.transformers import VAELoss
-from econvcnp.predefined import MLP, WideResNet, ReversedWideResNet, merge_flat_input
-from econvcnp.utils.initialization import weights_init
-from econvcnp.utils.torchextend import reparameterize
-from econvcnp.utils.helpers import cont_tuple_to_tuple_cont
-from econvcnp.training.helpers import split_labelled_unlabelled
+from wildml.transformers import VAELoss
+from wildml.predefined import MLP, WideResNet, ReversedWideResNet, merge_flat_input
+from wildml.utils.initialization import weights_init
+from wildml.utils.torchextend import reparameterize
+from wildml.utils.helpers import cont_tuple_to_tuple_cont
+from wildml.training.helpers import split_labelled_unlabelled
 
 
 __all__ = ['SSLVAELoss', 'SSLVAE']

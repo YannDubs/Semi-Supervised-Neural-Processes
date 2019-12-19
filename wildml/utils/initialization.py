@@ -10,15 +10,10 @@ def weights_init(module, **kwargs):
     module : nn.Module
        module to initialize.
     """
-    module.is_resetted = True
-    for m in module.modules():
-        try:
-            if hasattr(module, "reset_parameters") and module.is_resetted:
-                # don't reset if resetted already (might want special)
-                continue
-        except AttributeError:
-            pass
+    # lop over direct children (not grand children)
+    for m in module.children():
 
+        # all standard layers
         if isinstance(m, torch.nn.modules.conv._ConvNd):
             # used in https://github.com/brain-research/realistic-ssl-evaluation/
             nn.init.kaiming_normal_(m.weight, mode="fan_out", **kwargs)
@@ -28,17 +23,31 @@ def weights_init(module, **kwargs):
             m.weight.data.fill_(1)
             m.bias.data.zero_()
 
+        # if has a specific reset
+        elif hasattr(module, "reset_parameters"):
+            m.reset_parameters()
+            #! don't go in grand children because you might have specifc weights you don't want to reset
+
+        # else go in your grand children
+        else:
+            weights_init(m, **kwargs)
+
 
 def get_activation_name(activation):
     """Given a string or a `torch.nn.modules.activation` return the name of the activation."""
     if isinstance(activation, str):
         return activation
 
-    mapper = {nn.LeakyReLU: "leaky_relu", nn.ReLU: "relu", nn.Tanh: "tanh",
-              nn.Sigmoid: "sigmoid", nn.Softmax: "sigmoid"}
+    mapper = {
+        nn.LeakyReLU: "leaky_relu",
+        nn.ReLU: "relu",
+        nn.Tanh: "tanh",
+        nn.Sigmoid: "sigmoid",
+        nn.Softmax: "sigmoid",
+    }
     for k, v in mapper.items():
         if isinstance(activation, k):
-            return k
+            return v
 
     raise ValueError("Unkown given activation type : {}".format(activation))
 
@@ -80,9 +89,9 @@ def linear_init(module, activation="relu"):
 
     if activation_name == "leaky_relu":
         a = 0 if isinstance(activation, str) else activation.negative_slope
-        return nn.init.kaiming_uniform_(x, a=a, nonlinearity='leaky_relu')
+        return nn.init.kaiming_uniform_(x, a=a, nonlinearity="leaky_relu")
     elif activation_name == "relu":
-        return nn.init.kaiming_uniform_(x, nonlinearity='relu')
+        return nn.init.kaiming_uniform_(x, nonlinearity="relu")
     elif activation_name in ["sigmoid", "tanh"]:
         return nn.init.xavier_uniform_(x, gain=get_gain(activation))
 

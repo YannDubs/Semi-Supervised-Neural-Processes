@@ -5,5 +5,5 @@ model:
     is_stochastic: True
 
   loss:
-    beta: 0.001
+    beta: 0.1666 # corresponds to VIB 10^-3 for their experiments (our beta is normalized by entropies)
     regularization_loss: "I[Z;X]"

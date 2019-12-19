@@ -1,154 +1,66 @@
-import numpy as np
-from sklearn.model_selection import train_test_split
-from torch.utils.data import Dataset
-from sklearn.model_selection import PredefinedSplit
 import torch
 
-UNLABELLED_CLASS = -1
+from wildml.utils.helpers import tmp_seed
+from wildml.utils.datasplit import RandomMasker
 
 
-def merge_train_dev(train, dev):
+def get_masks_drop_features(drop_size, mask_shape, n_masks, n_batch=32, seed=123):
     """
-    Merge the train and dev `skorch.Dataset` and return the associated
-    `sklearn.model_selection.PredefinedSplit`.
-    """
-    train_valid_X = np.concatenate((train.X, dev.X))
-    train_valid_y = np.concatenate((train.y, dev.y))
-    cv = PredefinedSplit([-1 for _ in range(len(train))
-                          ] + [0 for _ in range(len(dev))])
-    return train_valid_X, train_valid_y, cv
-
-
-def concat(init, add):
-    if isinstance(init, torch.Tensor):
-        out = torch.cat([init] + add, dim=0)
-    elif isinstance(init, np.ndarray):
-        out = np.concatenate([init] + add, axis=0)
-    elif isinstance(init, (list, tuple)):
-        out = list(init) + list(add)
-    else:
-        raise ValueError("Unkown type of init {}".format(type(init)))
-    return out
-
-
-def make_ssl_dataset_(supervised, n_labels,
-                      unlabeled_class=UNLABELLED_CLASS,
-                      seed=123,
-                      is_stratify=True,
-                      is_augment=False,
-                      is_graph=False):
-    """Take a supervised dataset and turn it into an unsupervised one(inplace),
-    by giving a special unlabeled class as target."""
-    if n_labels == 1:
-        return  # want to have 100% labels
-
-    if is_graph:
-        targets = supervised.data.y
-    else:
-        targets = supervised.targets
-
-    stratify = targets if is_stratify else None
-    idcs_unlabel, indcs_labels = train_test_split(list(range(len(supervised))),
-                                                  stratify=stratify,
-                                                  test_size=n_labels,
-                                                  random_state=seed)
-
-    supervised.n_labels = len(indcs_labels)
-    # cannot set _DatasetSubset through indexing
-    targets[idcs_unlabel] = unlabeled_class
-
-    if is_augment:
-        data = supervised.data
-        n_labels = len(indcs_labels)
-        n_unlab = len(idcs_unlabel)
-        factor = int(n_unlab / n_labels) - 1
-        labeled_data = data[indcs_labels]
-        labeled_targets = targets[indcs_labels]
-        data = concat(data, [labeled_data] * factor)
-        targets = concat(targets, [labeled_targets] * factor)
-        supervised.data = data
-
-        try:
-            supervised.indcs = concat(supervised.indcs, [supervised.indcs[indcs_labels]] * factor)
-        except AttributeError:
-            pass
-
-    if is_graph:
-        supervised.data.y = targets
-    else:
-        supervised.targets = targets
-
-
-class _DatasetSubset(Dataset):
-    """Helper to split train dataset into train and dev dataset.
-
     Parameters
     ----------
-    to_split: Dataset
-        Dataset to subset.
+    drop_size : float or int or tuple, optional
+        If float, should be between 0.0 and 1.0 and represent the proportion of the dataset to 
+        drop. If int, represents the number of datapoints to drop. If tuple, same as before 
+        but give bounds (min and max). 0 means keep all.
 
-    idx_mapping: array-like
-        Indices of the subset.
+    mask_shape : tuple of int or callable
+        Shape of the mask for one example. If callable, it is given the current index.
 
-    Notes
-    -----
-    - Modified from: https: // gist.github.com / Fuchai / 12f2321e6c8fa53058f5eb23aeddb6ab
-    - Does modify the length and targets with indexing anymore! I.e.
-    `d.targets[1]=-1` doesn't work because np.array doesn't allow `arr[i][j]=-1`
-    but you can do `d.targets=targets`
-    """
+    n_masks : int, optional
+        Number of masks to return.
 
-    def __init__(self, to_split, idx_mapping):
-        self.idx_mapping = idx_mapping
-        self.length = len(idx_mapping)
-        self.to_split = to_split
+    n_batch : int, optional
+        Size of the batches of masks => number fo concsecutive examples with the same abount of 
+        kept features.
 
-    def __getitem__(self, index):
-        return self.to_split[self.idx_mapping[index]]
-
-    def __len__(self):
-        return self.length
-
-    @property
-    def targets(self):
-        return self.to_split.targets[self.idx_mapping]
-
-    @targets.setter
-    def targets(self, values):
-        self.to_split.targets[self.idx_mapping] = values
-
-    @property
-    def data(self):
-        return self.to_split.data[self.idx_mapping]
-
-    def __getattr__(self, attr):
-        return getattr(self.to_split, attr)
-
-
-def train_dev_split(to_split, dev_size=0.1, seed=123, is_stratify=True):
-    """Split a training dataset into a training and validation one.
-
-    Parameters
-    ----------
-    dev_size: float or int
-        If float, should be between 0.0 and 1.0 and represent the proportion of
-        the dataset to include in the dev split. If int, represents the absolute
-        number of dev samples.
-
-    seed: int
+    seed : int, optional
         Random seed.
 
-    is_stratify: bool
-        Whether to stratify splits based on class label.
-    """
-    n_all = len(to_split)
-    idcs_all = list(range(n_all))
-    stratify = to_split.targets if is_stratify else None
-    idcs_train, indcs_val = train_test_split(idcs_all,
-                                             stratify=stratify,
-                                             test_size=dev_size,
-                                             random_state=seed)
-    train = _DatasetSubset(to_split, idcs_train)
-    valid = _DatasetSubset(to_split, indcs_val)
+    Returns
+    -------
+    to_drops : list of torch.BoolTensor
+        List of length n_masks where each element is a boolean tensor of shape `mask_shape` with
+        1s where features should be droped.
 
-    return train, valid
+    Examples
+    --------
+    >>> get_masks_drop_features(0.5, (10,), 1, n_batch=1)
+    [tensor([ True, False, False, False,  True,  True, False,  True,  True, False])]
+    """
+
+    try:
+        mask_shape(0)
+    except TypeError:
+
+        def mask_shape(_, ret=mask_shape):
+            return ret
+
+    if drop_size == 0:
+        return [torch.zeros(1, *mask_shape(i)).bool() for i in n_batch]
+
+    with tmp_seed(seed):
+        try:
+            droper = RandomMasker(
+                min_nnz=drop_size[0], max_nnz=drop_size[1], is_batch_repeat=False
+            )
+        except TypeError:
+            droper = RandomMasker(min_nnz=drop_size, max_nnz=drop_size, is_batch_repeat=False)
+
+        to_drops = []
+
+        for i in range(0, n_masks, n_batch):
+            to_drop = droper(n_batch, mask_shape(i))
+            to_drops.extend(torch.unbind(to_drop.bool(), dim=0))
+
+    return to_drops
+

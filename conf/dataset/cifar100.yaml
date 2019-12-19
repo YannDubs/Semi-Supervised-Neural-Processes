@@ -2,5 +2,10 @@ dataset:
   name: cifar100
   shape: [3,32,32]
   n_classes: 100
+  n_train: 50000
+  type : imgs
+
+  kwargs:
+    is_augment: True
 
   

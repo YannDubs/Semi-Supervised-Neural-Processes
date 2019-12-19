@@ -1,0 +1,8 @@
+dataset:
+  name: yahoo
+  n_classes: 4
+  type: texts 
+
+  kwargs:
+    ngrams: 2
+

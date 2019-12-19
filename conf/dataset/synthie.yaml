@@ -1,0 +1,6 @@
+dataset:
+  name: synthie
+  n_classes: 4
+  n_train: 360
+  type: graphs 
+

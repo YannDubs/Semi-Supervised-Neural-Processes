@@ -18,8 +18,9 @@ defaults:
 
 # GENERAL
 paths:
+  data: /private/home/yannd/data/
   base_dir: /private/home/yannd/projects/Conditional-Information/
-  name: ${experiment}/{hyperparam_names}/run_${run}/ # cannot start directly by {}
+  name: ${experiment}/{hyperparam_path}/run_${run}/ # cannot start directly by {}
   chckpnt_dirnames: 
     - ${paths.base_dir}tmp_results/${paths.name}
     - .
@@ -37,7 +38,7 @@ train:
   is_train_trnsf: true
   is_train_clfs: true
   scheduling_factor: 100 # by how much to reduce learning rate during training
-  gamma: none 
+  gamma: null 
 
   kwargs: # kwargs for both transformer and classifier
     lr: 0.001
@@ -51,7 +52,7 @@ train:
     seed: ${seed}
 
 # HYPERPARAMETERS TO LOG (in order)
-# if you add something here you should run `python add_hyperparam.py` **before** changing the default of that value
+#! if you add something here you should run `python add_hyperparam.py` **before** changing the default of that value
 # this will rearange the results and tensorboard folder by saving the previous models under the correct hyperparameter
 hyperparameters:
   data: ${dataset.name}
@@ -65,26 +66,27 @@ hyperparameters:
   rep_zx_nlay: ${model.architecture.zx_nlayers}
   rep_zx_kpru: ${model.architecture.zx_kprune}
   beta: ${model.loss.beta}
+  nskip: ${model.architecture.n_skip}
+  zdim: ${model.architecture.z_dim}
 
 keys_ignored: 
-      - train_diG_zx
-      - train_H_x
-      - train_H_g_xz
-      - train_I_zx
-      - train_H_z
-      - train_H_zx
-      - train_diF_zy
-      - train_H_y
-      - train_H_f_yz
-      - train_H_f_yz
-      - valid_H_x
-      - valid_H_g_xz
-      - valid_I_zx
-      - valid_H_z
-      - valid_H_zx
-      - valid_diF_zy
-      - valid_H_y
-      - valid_H_f_yz
+  - train_diG_zx
+  - train_H_g_x
+  - train_H_g_xCz
+  - train_I_zx
+  - train_H_z
+  - train_H_zCx
+  - train_diF_zy
+  - train_H_f_y
+  - train_H_f_yCz
+  - valid_H_g_x
+  - valid_H_g_xCz
+  - valid_I_zx
+  - valid_H_z
+  - valid_H_zCx
+  - valid_diF_zy
+  - valid_H_f_y
+  - valid_H_f_yCz
 
 hydra:
     launcher:
