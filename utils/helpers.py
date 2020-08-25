@@ -2,6 +2,7 @@ import numpy as np
 import skorch
 from skorch.callbacks.scoring import check_scoring
 
+import omegaconf
 from omegaconf import OmegaConf
 
 from wildml.training.trainer import _single_epoch

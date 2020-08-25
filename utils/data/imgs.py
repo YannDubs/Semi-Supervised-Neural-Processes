@@ -64,6 +64,9 @@ class ImgDataset(BaseDataset):
         else:
             self.set_test_transforms()
 
+        if self.is_random_targets:
+            self.randomize_targets_()
+
     def set_train_transforms(self):
         """Return the training transformation."""
         self.transform = transforms.Compose(
@@ -179,6 +182,12 @@ class SVHN(ImgDataset, datasets.SVHN):
             [-2.2102,     nan, -2.2102,  ..., -2.2102,     nan,     nan],
             [    nan,     nan,     nan,  ...,     nan,     nan,     nan],
             [    nan,     nan,     nan,  ...,     nan, -2.2102,     nan]])
+
+    >>> data[0][1]
+    1
+    >>> data.randomize_targets_()
+    >>> data[0][1]
+    8
     """
 
     shape = (3, 32, 32)
@@ -311,8 +320,6 @@ if __name__ == "__main__":
     import sys
 
     import os
-
-    breakpoint()
 
     sys.path.append("../../")
     print(os.getcwd())

@@ -1,6 +1,7 @@
 import copy
 import logging
 import os
+import random
 
 import torch
 from sklearn.model_selection import train_test_split
@@ -28,6 +29,9 @@ class BaseDataset:
     is_return_index : bool, optional
         Whether to return the index in addition to the labels.
 
+    is_random_targets : bool, optional
+        Whether to use random targets for the dataset.
+
     seed : int, optional
         Random seed.
     """
@@ -39,12 +43,21 @@ class BaseDataset:
         root=os.path.join(DIR, "../../../../data/"),
         logger=logging.getLogger(__name__),
         is_return_index=False,
+        is_random_targets=False,
         seed=123,
     ):
         self.seed = seed
         self.logger = logger
         self.root = root
         self.is_return_index = is_return_index
+        self.is_random_targets = is_random_targets
+
+    def randomize_targets_(self):
+        """Randomize the targets in place"""
+        with tmp_seed(self.seed):
+            idcs = list(range(len(self.targets)))
+            random.shuffle(idcs)
+            self.targets = self.targets[idcs]
 
     def rm_all_transformations_(self):
         """Completely remove transformation."""

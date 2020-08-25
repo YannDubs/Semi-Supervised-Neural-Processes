@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 from sklearn.utils import resample, shuffle
 from skorch.utils import to_numpy, to_tensor
 
-from essl.utils.helpers import ratio_to_int
+from wildml.utils.helpers import ratio_to_int
 
 
 class SSLBatchSampler(Sampler):
